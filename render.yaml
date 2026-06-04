@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: lifeos-bot
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false          # введеш вручну в Render dashboard
+      - key: NOTION_TOKEN
+        sync: false          # введеш вручну в Render dashboard
+      # RENDER_EXTERNAL_URL та PORT Render встановлює автоматично

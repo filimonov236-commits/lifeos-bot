@@ -1,0 +1,23 @@
+# Secrets — НЕ пушити в GitHub!
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Logs
+*.log
+
+# macOS
+.DS_Store
+
+# Temp audio files
+*.ogg
+*.wav
