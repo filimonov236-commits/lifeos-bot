@@ -9,7 +9,7 @@ import os
 import re
 import logging
 import tempfile
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 import requests
 from dotenv import load_dotenv
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 NOTION_TOKEN   = os.environ["NOTION_TOKEN"]
 PORT           = int(os.environ.get("PORT", 8000))
-RENDER_URL     = os.environ.get("RENDER_EXTERNAL_URL", "")   # автоматично в Render
+RENDER_URL     = os.environ.get("RENDER_EXTERNAL_URL", "")
 
 NOTION_HEADERS = {
     "Authorization":  f"Bearer {NOTION_TOKEN}",
@@ -66,11 +66,45 @@ except ImportError:
     VOICE_ENABLED = False
     logger.warning("Voice recognition: disabled (install SpeechRecognition + pydub)")
 
+# ─── Dateparser (optional) ────────────────────────────────────────────────────
+try:
+    import dateparser
+    DATEPARSER_ENABLED = True
+    logger.info("Dateparser: OK")
+except ImportError:
+    DATEPARSER_ENABLED = False
+    logger.warning("Dateparser: disabled (install dateparser)")
+
 # ─── Локалізація ──────────────────────────────────────────────────────────────
 MONTHS_UK = [
     "", "Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень",
     "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень",
 ]
+MONTHS_UK_GEN = [
+    "", "січня", "лютого", "березня", "квітня", "травня", "червня",
+    "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",
+]
+
+DAYS_UA: dict[str, int] = {
+    "понеділок": 0, "понеділка": 0,
+    "вівторок":  1, "вівторка":  1,
+    "середу":    2, "середа":    2, "середи":    2,
+    "четвер":    3, "четверга":  3,
+    "п'ятницю":  4, "п'ятниця":  4, "п'ятниці":  4,
+    "пятницю":   4, "пятниця":   4, "пятниці":   4,
+    "суботу":    5, "субота":    5, "суботи":    5,
+    "неділю":    6, "неділя":    6, "неділі":    6,
+}
+
+CATEGORY_LABELS: dict[str, str] = {
+    "ідеї":               "💡 Ідея",
+    "транзакції_витрата": "💸 Витрата",
+    "транзакції_дохід":   "💚 Дохід",
+    "задачі":             "✅ Задача",
+    "тренування":         "🏋️ Тренування",
+    "борги":              "🏦 Борг",
+    "звички":             "🔁 Звичка",
+}
 
 # ─── Визначення категорії за ключовими словами ────────────────────────────────
 KEYWORDS: list[tuple[str, list[str]]] = [
@@ -90,12 +124,26 @@ KEYWORDS: list[tuple[str, list[str]]] = [
     ("звички",             ["звичка", "звички", "звичку", "моя звичка"]),
 ]
 
+# Розбивка повідомлення на частини по сполучниках
+_SPLIT_RE = re.compile(
+    r'(?<!\w)(?:і\s+ще|також|плюс|і|та|ще)(?!\w)',
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def split_message(text: str) -> list[str]:
+    parts = _SPLIT_RE.split(text)
+    cleaned = [p.strip() for p in parts if p.strip() and len(p.strip()) > 2]
+    return cleaned if len(cleaned) > 1 else [text]
+
+
 def detect_category(text: str) -> str | None:
     t = text.lower()
     for category, keywords in KEYWORDS:
         if any(kw in t for kw in keywords):
             return category
     return None
+
 
 def parse_amount(text: str) -> float | None:
     matches = re.findall(r"\b\d[\d\s]*(?:[.,]\d{1,2})?\b", text)
@@ -109,27 +157,75 @@ def parse_amount(text: str) -> float | None:
             continue
     return None
 
+
+def parse_date_from_text(text: str) -> str | None:
+    t = text.lower()
+    today = date.today()
+
+    if "сьогодні" in t:
+        return today.isoformat()
+    if "завтра" in t:
+        return (today + timedelta(days=1)).isoformat()
+
+    m = re.search(r'через\s+(\d+)\s+(день|дні|днів|тижні|тижнів|тижня)', t)
+    if m:
+        n    = int(m.group(1))
+        unit = m.group(2)
+        delta = timedelta(weeks=n) if "тижн" in unit else timedelta(days=n)
+        return (today + delta).isoformat()
+
+    for day_name, weekday in DAYS_UA.items():
+        if day_name in t:
+            days_ahead = (weekday - today.weekday()) % 7 or 7
+            return (today + timedelta(days=days_ahead)).isoformat()
+
+    if DATEPARSER_ENABLED:
+        try:
+            parsed = dateparser.parse(
+                text,
+                languages=["uk", "ru"],
+                settings={"PREFER_DATES_FROM": "future", "RETURN_AS_TIMEZONE_AWARE": False},
+            )
+            if parsed and parsed.date() != today:
+                return parsed.date().isoformat()
+        except Exception:
+            pass
+
+    return None
+
+
+def format_date_uk(iso: str) -> str:
+    d = date.fromisoformat(iso)
+    return f"{d.day} {MONTHS_UK_GEN[d.month]}"
+
+
 # ─── Notion helpers ───────────────────────────────────────────────────────────
 def today_iso() -> str:
     return date.today().isoformat()
 
+
 def title_prop(text: str) -> dict:
     return {"title": [{"text": {"content": text[:2000]}}]}
+
 
 def date_prop(iso: str) -> dict:
     return {"date": {"start": iso}}
 
+
 def select_prop(name: str) -> dict:
     return {"select": {"name": name}}
 
+
 def number_prop(val: float) -> dict:
     return {"number": val}
+
 
 def get_title(page: dict) -> str:
     for p in page.get("properties", {}).values():
         if p.get("type") == "title":
             return "".join(b.get("plain_text", "") for b in p.get("title", []))
     return "(без назви)"
+
 
 def notion_create(db_key: str, properties: dict) -> bool:
     resp = requests.post(
@@ -141,6 +237,7 @@ def notion_create(db_key: str, properties: dict) -> bool:
     if resp.status_code != 200:
         logger.error(f"Notion create error {resp.status_code}: {resp.text[:300]}")
     return resp.status_code == 200
+
 
 def notion_query(db_key: str, filter_obj: dict | None = None,
                  sorts: list | None = None) -> list:
@@ -160,101 +257,110 @@ def notion_query(db_key: str, filter_obj: dict | None = None,
         return []
     return resp.json().get("results", [])
 
-# ─── Обробка повідомлення ─────────────────────────────────────────────────────
-async def process_text(update: Update, text: str) -> None:
-    category = detect_category(text)
-    amount   = parse_amount(text)
-    today    = today_iso()
 
-    if not category:
-        await update.message.reply_text(
-            "🤔 Не зрозумів куди записати.\n"
-            "Введи /help щоб побачити всі ключові слова."
-        )
-        return
+# ─── Створення одного запису ──────────────────────────────────────────────────
+def create_single_record(text: str, category: str, date_iso: str | None) -> tuple[bool, str]:
+    """Записує один запис у Notion. Повертає (успіх, мітка для відповіді)."""
+    amount = parse_amount(text)
+    label  = CATEGORY_LABELS.get(category, category)
 
-    ok       = False
-    db_label = ""
-
-    # ── Ідеї ──────────────────────────────────────────────────────────────────
     if category == "ідеї":
-        ok = notion_create("ідеї", {
-            "Назва":   title_prop(text),
-            "Статус":  select_prop("🆕 Нова"),
-            "Дата":    date_prop(today),
-        })
-        db_label = "💡 Ідеї"
+        props: dict = {"Назва": title_prop(text), "Статус": select_prop("🆕 Нова")}
+        if date_iso:
+            props["Дата"] = date_prop(date_iso)
+        return notion_create("ідеї", props), label
 
-    # ── Витрата ───────────────────────────────────────────────────────────────
-    elif category == "транзакції_витрата":
-        тип = "🔴 Витрата"
-        props = {"Опис": title_prop(text), "Тип": select_prop(тип), "Дата": date_prop(today)}
+    if category == "транзакції_витрата":
+        props = {"Опис": title_prop(text), "Тип": select_prop("🔴 Витрата"),
+                 "Дата": date_prop(date_iso or today_iso())}
         if amount:
             props["Сума"] = number_prop(amount)
-        ok = notion_create("транзакції", props)
-        db_label = f"💸 Транзакції ({тип})"
+        return notion_create("транзакції", props), label
 
-    # ── Дохід ─────────────────────────────────────────────────────────────────
-    elif category == "транзакції_дохід":
-        тип = "💚 Дохід"
-        props = {"Опис": title_prop(text), "Тип": select_prop(тип), "Дата": date_prop(today)}
+    if category == "транзакції_дохід":
+        props = {"Опис": title_prop(text), "Тип": select_prop("💚 Дохід"),
+                 "Дата": date_prop(date_iso or today_iso())}
         if amount:
             props["Сума"] = number_prop(amount)
-        ok = notion_create("транзакції", props)
-        db_label = f"💸 Транзакції ({тип})"
+        return notion_create("транзакції", props), label
 
-    # ── Задачі ────────────────────────────────────────────────────────────────
-    elif category == "задачі":
-        ok = notion_create("задачі", {
-            "Назва":   title_prop(text),
-            "Статус":  select_prop("⬜ Не почато"),
-            "Дата":    date_prop(today),
-        })
-        db_label = "✅ Задачі"
+    if category == "задачі":
+        props = {"Назва": title_prop(text), "Статус": select_prop("⬜ Не почато")}
+        if date_iso:
+            props["Дата"] = date_prop(date_iso)
+        return notion_create("задачі", props), label
 
-    # ── Тренування ────────────────────────────────────────────────────────────
-    elif category == "тренування":
-        ok = notion_create("тренування", {
-            "Тип":  title_prop(text),
-            "Дата": date_prop(today),
-        })
-        db_label = "🏋️ Тренування"
+    if category == "тренування":
+        props = {"Тип": title_prop(text), "Дата": date_prop(date_iso or today_iso())}
+        return notion_create("тренування", props), label
 
-    # ── Борги ─────────────────────────────────────────────────────────────────
-    elif category == "борги":
-        t = text.lower()
-        тип = "📤 Я дав" if any(kw in t for kw in ["дав", "позичив", "позичила"]) else "📥 Мені дали"
+    if category == "борги":
+        t_low = text.lower()
+        тип = "📤 Я дав" if any(kw in t_low for kw in ["дав", "позичив", "позичила"]) else "📥 Мені дали"
         props = {
             "Опис":   title_prop(text),
             "Тип":    select_prop(тип),
-            "Дата":   date_prop(today),
+            "Дата":   date_prop(date_iso or today_iso()),
             "Статус": select_prop("⏳ Активний"),
         }
         if amount:
             props["Сума"] = number_prop(amount)
-        ok = notion_create("борги", props)
-        db_label = f"🏦 Борги і позики ({тип})"
+        return notion_create("борги", props), f"🏦 Борг ({тип})"
 
-    # ── Звички ────────────────────────────────────────────────────────────────
-    elif category == "звички":
-        ok = notion_create("звички", {
-            "Звичка":  title_prop(text),
-            "Дата":    date_prop(today),
+    if category == "звички":
+        props = {
+            "Звичка":   title_prop(text),
+            "Дата":     date_prop(date_iso or today_iso()),
             "Виконано": {"checkbox": True},
-        })
-        db_label = "🔁 Звички"
+        }
+        return notion_create("звички", props), label
 
-    # ── Відповідь ─────────────────────────────────────────────────────────────
-    if ok:
-        reply = f"✅ Додано в {db_label}\n\n📝 {text}"
-        if amount:
-            reply += f"\n💰 Сума: {amount:,.0f} грн"
-        await update.message.reply_text(reply)
-    else:
+    return False, label
+
+
+def _record_line(text: str, label: str, date_iso: str | None, amount: float | None) -> str:
+    date_part   = f" — {format_date_uk(date_iso)}" if date_iso else ""
+    amount_part = f" ({amount:,.0f} грн)"          if amount   else ""
+    short       = text[:60] + ("…" if len(text) > 60 else "")
+    return f"{label}: «{short}»{date_part}{amount_part}"
+
+
+# ─── Обробка повідомлення ─────────────────────────────────────────────────────
+async def process_text(update: Update, text: str) -> None:
+    parts = split_message(text)
+    lines: list[str] = []
+    any_recognized = False
+
+    for part in parts:
+        category = detect_category(part)
+        if not category:
+            if len(parts) > 1:
+                continue  # пропустити нерозпізнані фрагменти в режимі кількох записів
+            await update.message.reply_text(
+                "🤔 Не зрозумів куди записати.\n"
+                "Введи /help щоб побачити всі ключові слова."
+            )
+            return
+
+        any_recognized = True
+        date_iso = parse_date_from_text(part)
+        amount   = parse_amount(part)
+        ok, label = create_single_record(part, category, date_iso)
+
+        if ok:
+            lines.append(f"✅ {_record_line(part, label, date_iso, amount)}")
+        else:
+            lines.append(f"❌ Помилка запису: «{part[:50]}»")
+
+    if not any_recognized:
         await update.message.reply_text(
-            "❌ Помилка запису в Notion.\n"
-            "Перевір NOTION_TOKEN та доступ до баз даних."
+            "🤔 Не зрозумів жодної дії.\n"
+            "Введи /help щоб побачити всі ключові слова."
         )
+        return
+
+    await update.message.reply_text("\n".join(lines))
+
 
 # ─── Handlers ─────────────────────────────────────────────────────────────────
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -319,7 +425,7 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "задачі",
         filter_obj={
             "and": [
-                {"property": "Дата",   "date":   {"equals":       today}},
+                {"property": "Дата",   "date":   {"equals":         today}},
                 {"property": "Статус", "select": {"does_not_equal": "✅ Готово"}},
             ]
         },
@@ -338,8 +444,8 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     for item in results:
         props  = item.get("properties", {})
         title  = get_title(item)
-        status = props.get("Статус",   {}).get("select", {}).get("name", "—")
-        prio   = props.get("Пріоритет",{}).get("select", {}).get("name", "")
+        status = props.get("Статус",    {}).get("select", {}).get("name", "—")
+        prio   = props.get("Пріоритет", {}).get("select", {}).get("name", "")
         icon   = priority_icons.get(prio, "•")
         lines.append(f"{icon} {title}  [{status}]")
 
@@ -347,11 +453,11 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    now          = datetime.now()
-    month_start  = f"{now.year}-{now.month:02d}-01"
-    next_m       = now.month % 12 + 1
-    next_y       = now.year + (1 if now.month == 12 else 0)
-    month_end    = f"{next_y}-{next_m:02d}-01"
+    now         = datetime.now()
+    month_start = f"{now.year}-{now.month:02d}-01"
+    next_m      = now.month % 12 + 1
+    next_y      = now.year + (1 if now.month == 12 else 0)
+    month_end   = f"{next_y}-{next_m:02d}-01"
 
     results = notion_query(
         "транзакції",
@@ -402,7 +508,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "  борг, позичив, дав у борг, взяв у борг\n\n"
         "🔁 *Звичка*\n"
         "  звичка\n\n"
-        "💰 Числа в тексті автоматично стають сумою\n\n"
+        "💰 Числа в тексті автоматично стають сумою\n"
+        "📅 Дати: «завтра», «в п'ятницю», «через 3 дні», «сьогодні»\n\n"
         "─────────────────────\n"
         "⌨️ *Команди:*\n"
         "/today — задачі на сьогодні\n"
@@ -410,6 +517,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/help — ця довідка",
         parse_mode="Markdown",
     )
+
 
 # ─── Main ──────────────────────────────────────────────────────────────────────
 def main() -> None:
