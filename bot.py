@@ -46,15 +46,50 @@ NOTION_API = "https://api.notion.com/v1"
 
 # ─── Database IDs ─────────────────────────────────────────────────────────────
 DB = {
-    "ідеї":       "375c228f-5e9f-81c4-9a3b-dc64cf71186a",
-    "задачі":     "375c228f-5e9f-8193-9ef4-ddfb51fbb6c3",
-    "транзакції": "375c228f-5e9f-81ba-b03c-d3ae800b912b",
-    "тренування": "375c228f-5e9f-813a-b77e-ce1093e38893",
-    "борги":      "375c228f-5e9f-81ef-939a-fd6852fa011c",
-    "проекти":    "375c228f-5e9f-8192-9cb3-e24ed61e799f",
-    "звички":     "375c228f-5e9f-81e1-ab37-cb11eecbd78a",
-    "люди":       "375c228f-5e9f-81f4-91f4-d3b84d05db6a",
+    "ідеї":             "375c228f-5e9f-81c4-9a3b-dc64cf71186a",
+    "задачі":           "375c228f-5e9f-8193-9ef4-ddfb51fbb6c3",
+    "тренування":       "375c228f-5e9f-813a-b77e-ce1093e38893",
+    "проекти":          "375c228f-5e9f-8192-9cb3-e24ed61e799f",
+    "звички":           "375c228f-5e9f-81e1-ab37-cb11eecbd78a",
+    "люди":             "375c228f-5e9f-81f4-91f4-d3b84d05db6a",
+    # ── Фінанси (нові) ──────────────────────────────────────────────────────
+    "expenses":         "376c228f-5e9f-8186-b4ad-d8b4205e7c16",
+    "budget_categories":"376c228f-5e9f-818b-8e82-d1dce4cec889",
+    "income":           "376c228f-5e9f-8100-8a76-eb860867d186",
 }
+
+# Прив'язка назви категорії → page_id в Budget Categories
+BUDGET_CAT_IDS: dict[str, str] = {
+    "Їжа":         "376c228f-5e9f-813f-a157-fe595bd2700f",
+    "Транспорт":   "376c228f-5e9f-81dd-ba8d-dbf6b3326258",
+    "Дім":         "376c228f-5e9f-819a-8a85-f206df300101",
+    "Здоров'я":    "376c228f-5e9f-8183-afc5-ede03aa1e25e",
+    "Розваги":     "376c228f-5e9f-8180-8149-d2eec4f331ac",
+    "Одяг":        "376c228f-5e9f-81b0-9e09-fd4fad4ac5d0",
+    "Інше":        "376c228f-5e9f-81b4-9e8b-d1f9ec9b394a",
+    "Комунальні":  "376c228f-5e9f-8132-8a24-c41c592528f7",
+    "Інструменти": "376c228f-5e9f-814e-afac-d4f3709fed03",
+}
+
+# Ключові слова для визначення категорії витрати
+EXPENSE_CAT_KEYWORDS: list[tuple[str, list[str]]] = [
+    ("Їжа",         ["їжа", "продукти", "ресторан", "кафе", "кава", "обід",
+                     "вечеря", "сніданок", "піца", "суші", "фастфуд", "бар", "groceries"]),
+    ("Транспорт",   ["таксі", "метро", "бус", "автобус", "авто", "бензин",
+                     "пальне", "поїзд", "маршрутка", "uber", "bolt", "укрзалізниця"]),
+    ("Дім",         ["ремонт", "меблі", "побут", "квартира", "оренда",
+                     "будинок", "техніка", "посуд", "дім", "хата"]),
+    ("Здоров'я",    ["ліки", "лікар", "аптека", "клініка", "лікарня",
+                     "аналізи", "здоров", "зуб", "стоматолог", "спорт"]),
+    ("Розваги",     ["кіно", "концерт", "ігри", "гра", "розваги",
+                     "відпочин", "парк", "зоопарк", "netflix", "spotify"]),
+    ("Одяг",        ["одяг", "взуття", "куртка", "штани", "сорочка",
+                     "шопінг", "кросівки", "сукня", "одягу"]),
+    ("Комунальні",  ["комуналка", "електрика", "вода", "газ", "інтернет",
+                     "зв'язок", "телефон", "комунальні"]),
+    ("Інструменти", ["підписка", "програм", "сервіс", "курс", "онлайн",
+                     "software", "додаток", "app", "хостинг"]),
+]
 
 # ─── Voice (optional) ─────────────────────────────────────────────────────────
 try:
@@ -97,31 +132,26 @@ DAYS_UA: dict[str, int] = {
 }
 
 CATEGORY_LABELS: dict[str, str] = {
-    "ідеї":               "💡 Ідея",
-    "транзакції_витрата": "💸 Витрата",
-    "транзакції_дохід":   "💚 Дохід",
-    "задачі":             "✅ Задача",
-    "тренування":         "🏋️ Тренування",
-    "борги":              "🏦 Борг",
-    "звички":             "🔁 Звичка",
+    "ідеї":    "💡 Ідея",
+    "витрата": "💸 Витрата",
+    "дохід":   "💚 Дохід",
+    "задачі":  "✅ Задача",
+    "тренування": "🏋️ Тренування",
+    "звички":  "🔁 Звичка",
 }
 
 # ─── Визначення категорії за ключовими словами ────────────────────────────────
 KEYWORDS: list[tuple[str, list[str]]] = [
-    ("ідеї",               ["ідея", "думка", "що якщо", "ідею", "мабуть варто"]),
-    ("транзакції_витрата", ["витрата", "купив", "заплатив", "потратив",
-                            "витратив", "купила", "заплатила", "потратила",
-                            "заплатили", "витрачено"]),
-    ("транзакції_дохід",   ["дохід", "отримав", "заробив", "прийшло",
-                            "отримала", "заробила", "надійшло", "нарахували"]),
-    ("задачі",             ["задача", "задачу", "треба", "зробити", "нагадай",
-                            "завдання", "to do", "нагадати", "не забути"]),
-    ("тренування",         ["тренування", "тренувався", "тренувалась",
-                            "зробив зарядку", "пробіг", "пробігла",
-                            "зарядка", "качав", "підтягування", "пробіжка"]),
-    ("борги",              ["борг", "борги", "позичив", "позичила", "позику",
-                            "дав у борг", "взяв у борг", "повернув", "повернула"]),
-    ("звички",             ["звичка", "звички", "звичку", "моя звичка"]),
+    ("ідеї",    ["ідея", "думка", "що якщо", "ідею", "мабуть варто"]),
+    ("витрата", ["витрата", "купив", "заплатив", "потратив", "витратив",
+                 "купила", "заплатила", "потратила", "заплатили", "витрачено"]),
+    ("дохід",   ["дохід", "отримав", "заробив", "прийшло", "отримала",
+                 "заробила", "надійшло", "нарахували"]),
+    ("задачі",  ["задача", "задачу", "треба", "зробити", "нагадай",
+                 "завдання", "to do", "нагадати", "не забути"]),
+    ("тренування", ["тренування", "тренувався", "тренувалась", "зробив зарядку",
+                    "пробіг", "пробігла", "зарядка", "качав", "підтягування", "пробіжка"]),
+    ("звички",  ["звичка", "звички", "звичку", "моя звичка"]),
 ]
 
 # Розбивка повідомлення на частини по сполучниках
@@ -143,6 +173,14 @@ def detect_category(text: str) -> str | None:
         if any(kw in t for kw in keywords):
             return category
     return None
+
+
+def detect_expense_category(text: str) -> str:
+    t = text.lower()
+    for cat_name, keywords in EXPENSE_CAT_KEYWORDS:
+        if any(kw in t for kw in keywords):
+            return cat_name
+    return "Інше"
 
 
 def parse_amount(text: str) -> float | None:
@@ -220,6 +258,10 @@ def number_prop(val: float) -> dict:
     return {"number": val}
 
 
+def relation_prop(page_id: str) -> dict:
+    return {"relation": [{"id": page_id}]}
+
+
 def get_title(page: dict) -> str:
     for p in page.get("properties", {}).values():
         if p.get("type") == "title":
@@ -241,7 +283,7 @@ def notion_create(db_key: str, properties: dict) -> bool:
 
 def notion_query(db_key: str, filter_obj: dict | None = None,
                  sorts: list | None = None) -> list:
-    body: dict = {"page_size": 50}
+    body: dict = {"page_size": 100}
     if filter_obj:
         body["filter"] = filter_obj
     if sorts:
@@ -260,7 +302,6 @@ def notion_query(db_key: str, filter_obj: dict | None = None,
 
 # ─── Створення одного запису ──────────────────────────────────────────────────
 def create_single_record(text: str, category: str, date_iso: str | None) -> tuple[bool, str]:
-    """Записує один запис у Notion. Повертає (успіх, мітка для відповіді)."""
     amount = parse_amount(text)
     label  = CATEGORY_LABELS.get(category, category)
 
@@ -270,19 +311,27 @@ def create_single_record(text: str, category: str, date_iso: str | None) -> tupl
             props["Дата"] = date_prop(date_iso)
         return notion_create("ідеї", props), label
 
-    if category == "транзакції_витрата":
-        props = {"Опис": title_prop(text), "Тип": select_prop("🔴 Витрата"),
-                 "Дата": date_prop(date_iso or today_iso())}
+    if category == "витрата":
+        exp_cat  = detect_expense_category(text)
+        cat_id   = BUDGET_CAT_IDS.get(exp_cat, BUDGET_CAT_IDS["Інше"])
+        props = {
+            "Description":   title_prop(text),
+            "Date":          date_prop(date_iso or today_iso()),
+            "Budget Category": relation_prop(cat_id),
+        }
         if amount:
-            props["Сума"] = number_prop(amount)
-        return notion_create("транзакції", props), label
+            props["Amount"] = number_prop(amount)
+        ok = notion_create("expenses", props)
+        return ok, f"💸 Витрата [{exp_cat}]"
 
-    if category == "транзакції_дохід":
-        props = {"Опис": title_prop(text), "Тип": select_prop("💚 Дохід"),
-                 "Дата": date_prop(date_iso or today_iso())}
+    if category == "дохід":
+        props = {
+            "Income": title_prop(text),
+            "Date":   date_prop(date_iso or today_iso()),
+        }
         if amount:
-            props["Сума"] = number_prop(amount)
-        return notion_create("транзакції", props), label
+            props["Amount"] = number_prop(amount)
+        return notion_create("income", props), label
 
     if category == "задачі":
         props = {"Назва": title_prop(text), "Статус": select_prop("⬜ Не почато")}
@@ -293,19 +342,6 @@ def create_single_record(text: str, category: str, date_iso: str | None) -> tupl
     if category == "тренування":
         props = {"Тип": title_prop(text), "Дата": date_prop(date_iso or today_iso())}
         return notion_create("тренування", props), label
-
-    if category == "борги":
-        t_low = text.lower()
-        тип = "📤 Я дав" if any(kw in t_low for kw in ["дав", "позичив", "позичила"]) else "📥 Мені дали"
-        props = {
-            "Опис":   title_prop(text),
-            "Тип":    select_prop(тип),
-            "Дата":   date_prop(date_iso or today_iso()),
-            "Статус": select_prop("⏳ Активний"),
-        }
-        if amount:
-            props["Сума"] = number_prop(amount)
-        return notion_create("борги", props), f"🏦 Борг ({тип})"
 
     if category == "звички":
         props = {
@@ -335,7 +371,7 @@ async def process_text(update: Update, text: str) -> None:
         category = detect_category(part)
         if not category:
             if len(parts) > 1:
-                continue  # пропустити нерозпізнані фрагменти в режимі кількох записів
+                continue
             await update.message.reply_text(
                 "🤔 Не зрозумів куди записати.\n"
                 "Введи /help щоб побачити всі ключові слова."
@@ -459,23 +495,29 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     next_y      = now.year + (1 if now.month == 12 else 0)
     month_end   = f"{next_y}-{next_m:02d}-01"
 
-    results = notion_query(
-        "транзакції",
-        filter_obj={
-            "and": [
-                {"property": "Дата", "date": {"on_or_after": month_start}},
-                {"property": "Дата", "date": {"before":      month_end}},
-            ]
-        },
-    )
+    month_filter = {
+        "and": [
+            {"property": "Date", "date": {"on_or_after": month_start}},
+            {"property": "Date", "date": {"before":      month_end}},
+        ]
+    }
 
-    income = expense = 0.0
-    for item in results:
-        props  = item.get("properties", {})
-        amount = props.get("Сума", {}).get("number") or 0
-        тип    = props.get("Тип",  {}).get("select", {}).get("name", "")
-        if "Дохід"   in тип: income  += amount
-        if "Витрата" in тип: expense += amount
+    expenses_rows = notion_query("expenses", filter_obj=month_filter)
+    income_rows   = notion_query("income",   filter_obj={
+        "and": [
+            {"property": "Date", "date": {"on_or_after": month_start}},
+            {"property": "Date", "date": {"before":      month_end}},
+        ]
+    })
+
+    expense = sum(
+        (r.get("properties", {}).get("Amount", {}).get("number") or 0)
+        for r in expenses_rows
+    )
+    income = sum(
+        (r.get("properties", {}).get("Amount", {}).get("number") or 0)
+        for r in income_rows
+    )
 
     balance = income - expense
     sign    = "+" if balance >= 0 else ""
@@ -483,11 +525,55 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     await update.message.reply_text(
         f"💰 Баланс за {MONTHS_UK[now.month]} {now.year}:\n\n"
-        f"💚 Дохід:   {income:>10,.0f} грн\n"
+        f"💚 Доходи:  {income:>10,.0f} грн\n"
         f"🔴 Витрати: {expense:>10,.0f} грн\n"
-        f"{'─' * 24}\n"
-        f"{emoji} Залишок: {sign}{balance:>9,.0f} грн"
+        f"{'─' * 26}\n"
+        f"{emoji} Баланс:  {sign}{balance:>9,.0f} грн"
     )
+
+
+async def cmd_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    now = datetime.now()
+    rows = notion_query("budget_categories")
+
+    if not rows:
+        await update.message.reply_text("📊 Budget Categories порожній.")
+        return
+
+    lines = [f"📊 Бюджет за {MONTHS_UK[now.month]} {now.year}:\n"]
+    total_budget = total_actual = 0.0
+
+    for item in rows:
+        props = item.get("properties", {})
+
+        # Category name
+        cat = "".join(
+            b.get("plain_text", "")
+            for b in props.get("Category", {}).get("title", [])
+        )
+
+        budget = props.get("Budget", {}).get("number") or 0.0
+
+        # Actual — rollup повертає число
+        actual_raw = props.get("Actual", {}).get("rollup", {})
+        actual = actual_raw.get("number") or 0.0
+
+        diff = budget - actual
+        diff_str = f"+{diff:,.0f}" if diff >= 0 else f"{diff:,.0f}"
+        status = "🟢" if diff >= 0 else "🔴"
+
+        lines.append(
+            f"{status} {cat}: витрачено {actual:,.0f} / ліміт {budget:,.0f} грн  ({diff_str} грн)"
+        )
+        total_budget += budget
+        total_actual += actual
+
+    total_diff = total_budget - total_actual
+    diff_str   = f"+{total_diff:,.0f}" if total_diff >= 0 else f"{total_diff:,.0f}"
+    lines.append(f"\n{'─' * 30}")
+    lines.append(f"Всього: {total_actual:,.0f} / {total_budget:,.0f} грн  ({diff_str} грн)")
+
+    await update.message.reply_text("\n".join(lines))
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -496,16 +582,16 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Просто напиши або надішли голосове — я визначу куди записати:\n\n"
         "💡 *Ідеї*\n"
         "  ідея, думка, що якщо\n\n"
-        "🔴 *Витрата*\n"
-        "  купив, заплатив, потратив, витрата\n\n"
-        "💚 *Дохід*\n"
+        "💸 *Витрата* → Expenses\n"
+        "  купив, заплатив, потратив, витрата\n"
+        "  Категорія визначається автоматично:\n"
+        "  їжа / транспорт / дім / здоров'я / розваги / одяг / комунальні / інструменти\n\n"
+        "💚 *Дохід* → Source of Income\n"
         "  отримав, заробив, прийшло, дохід\n\n"
         "✅ *Задача*\n"
         "  треба, зробити, нагадай, задача\n\n"
         "🏋️ *Тренування*\n"
         "  тренувався, пробіг, зарядка\n\n"
-        "🏦 *Борг*\n"
-        "  борг, позичив, дав у борг, взяв у борг\n\n"
         "🔁 *Звичка*\n"
         "  звичка\n\n"
         "💰 Числа в тексті автоматично стають сумою\n"
@@ -513,7 +599,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "─────────────────────\n"
         "⌨️ *Команди:*\n"
         "/today — задачі на сьогодні\n"
-        "/balance — баланс за місяць\n"
+        "/balance — доходи / витрати / баланс за місяць\n"
+        "/budget — бюджет по категоріях\n"
         "/help — ця довідка",
         parse_mode="Markdown",
     )
@@ -527,6 +614,7 @@ def main() -> None:
     app.add_handler(CommandHandler("help",    cmd_help))
     app.add_handler(CommandHandler("today",   cmd_today))
     app.add_handler(CommandHandler("balance", cmd_balance))
+    app.add_handler(CommandHandler("budget",  cmd_budget))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
