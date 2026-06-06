@@ -48,50 +48,56 @@ NOTION_API = "https://api.notion.com/v1"
 # ─── Database IDs ─────────────────────────────────────────────────────────────
 DB = {
     "ідеї":             "375c228f-5e9f-81c4-9a3b-dc64cf71186a",
-    "задачі":           "65ec228f-5e9f-831f-a2dd-81bcf445f6e9",  # Habit Tracker (template)
+    "задачі":           "65ec228f-5e9f-831f-a2dd-81bcf445f6e9",  # Habit Tracker
     "тренування":       "375c228f-5e9f-813a-b77e-ce1093e38893",
     "проекти":          "375c228f-5e9f-8192-9cb3-e24ed61e799f",
     "звички":           "375c228f-5e9f-81e1-ab37-cb11eecbd78a",
     "люди":             "375c228f-5e9f-81f4-91f4-d3b84d05db6a",
-    "monthly_overview": "facc228f-5e9f-83b5-9221-01e85e270842",
-    "the_streak":       "bbac228f-5e9f-82a7-b2b1-81ad2afeb4df",
-    # ── Фінанси ─────────────────────────────────────────────────────────────
-    "expenses":         "376c228f-5e9f-8186-b4ad-d8b4205e7c16",
-    "budget_categories":"376c228f-5e9f-818b-8e82-d1dce4cec889",
-    "income":           "376c228f-5e9f-8100-8a76-eb860867d186",
+    # ── Бюджет ──────────────────────────────────────────────────────────────
+    "транзакції":       "5cac228f-5e9f-8244-b4c9-81258e9dc075",
+    "місячний_бюджет":  "ca2c228f-5e9f-83e9-bbf4-8198e3305cc7",
+    "доходи_витрати":   "1eec228f-5e9f-83cd-88cb-019140bf89ac",
+    "рахунки":          "7edc228f-5e9f-834f-ab9c-8168d45ca289",
+    "аналіз":           "f39c228f-5e9f-829f-81ee-81b3c0bf9a9c",
 }
 
-# Прив'язка назви категорії → page_id в Budget Categories
+# IDs типу транзакції: Дохід / Витрата
+INCOME_TYPE_ID  = "d18c228f-5e9f-82a5-9647-81794899cfce"
+EXPENSE_TYPE_ID = "de1c228f-5e9f-82f4-b6e4-019eb100cfc1"
+
+# IDs рахунків
+ACCOUNT_IDS: dict[str, str] = {
+    "Готівка":    "f00c228f-5e9f-828e-975e-8128ec963fd4",
+    "ПриватБанк": "53fc228f-5e9f-8324-be11-81d10249b8ec",
+    "Monobank":   "63ac228f-5e9f-83b0-b5df-81e4a34baec7",
+}
+
+# Прив'язка назви категорії → page_id в Місячний бюджет
 BUDGET_CAT_IDS: dict[str, str] = {
-    "Їжа":         "376c228f-5e9f-813f-a157-fe595bd2700f",
-    "Транспорт":   "376c228f-5e9f-81dd-ba8d-dbf6b3326258",
-    "Дім":         "376c228f-5e9f-819a-8a85-f206df300101",
-    "Здоров'я":    "376c228f-5e9f-8183-afc5-ede03aa1e25e",
-    "Розваги":     "376c228f-5e9f-8180-8149-d2eec4f331ac",
-    "Одяг":        "376c228f-5e9f-81b0-9e09-fd4fad4ac5d0",
-    "Інше":        "376c228f-5e9f-81b4-9e8b-d1f9ec9b394a",
-    "Комунальні":  "376c228f-5e9f-8132-8a24-c41c592528f7",
-    "Інструменти": "376c228f-5e9f-814e-afac-d4f3709fed03",
+    "Їжа та кафе":     "623c228f-5e9f-8263-bb78-811858e16b2d",
+    "Транспорт":       "23bc228f-5e9f-82eb-9bbe-013c3852b35d",
+    "Комунальні":      "275c228f-5e9f-82cb-8fb0-019c7f868706",
+    "Розваги та спорт":"815c228f-5e9f-82d2-9e51-017184c0b53f",
+    "Одяг":            "79dc228f-5e9f-8378-b7ff-01a6f3522b3e",
+    "Підписки":        "2e6c228f-5e9f-828b-895c-81db3ac89365",
+    "Зарплата":        "20ec228f-5e9f-83f3-bc94-810e7d64e19a",
+    "Інше":            "7bfc228f-5e9f-8323-b477-01ce25868ae8",
 }
 
 # Ключові слова для визначення категорії витрати
 EXPENSE_CAT_KEYWORDS: list[tuple[str, list[str]]] = [
-    ("Їжа",         ["їжа", "продукти", "ресторан", "кафе", "кава", "обід",
-                     "вечеря", "сніданок", "піца", "суші", "фастфуд", "бар", "groceries"]),
-    ("Транспорт",   ["таксі", "метро", "бус", "автобус", "авто", "бензин",
-                     "пальне", "поїзд", "маршрутка", "uber", "bolt", "укрзалізниця"]),
-    ("Дім",         ["ремонт", "меблі", "побут", "квартира", "оренда",
-                     "будинок", "техніка", "посуд", "дім", "хата"]),
-    ("Здоров'я",    ["ліки", "лікар", "аптека", "клініка", "лікарня",
-                     "аналізи", "здоров", "зуб", "стоматолог", "спорт"]),
-    ("Розваги",     ["кіно", "концерт", "ігри", "гра", "розваги",
-                     "відпочин", "парк", "зоопарк", "netflix", "spotify"]),
-    ("Одяг",        ["одяг", "взуття", "куртка", "штани", "сорочка",
-                     "шопінг", "кросівки", "сукня", "одягу"]),
-    ("Комунальні",  ["комуналка", "електрика", "вода", "газ", "інтернет",
-                     "зв'язок", "телефон", "комунальні"]),
-    ("Інструменти", ["підписка", "програм", "сервіс", "курс", "онлайн",
-                     "software", "додаток", "app", "хостинг"]),
+    ("Їжа та кафе",     ["їжа", "продукти", "ресторан", "кафе", "кава", "обід",
+                         "вечеря", "сніданок", "піца", "суші", "фастфуд", "бар", "groceries"]),
+    ("Транспорт",       ["таксі", "метро", "бус", "автобус", "авто", "бензин",
+                         "пальне", "поїзд", "маршрутка", "uber", "bolt", "укрзалізниця"]),
+    ("Комунальні",      ["комуналка", "електрика", "вода", "газ", "інтернет",
+                         "зв'язок", "телефон", "комунальні"]),
+    ("Розваги та спорт",["кіно", "концерт", "ігри", "гра", "розваги", "спорт",
+                         "відпочин", "парк", "зоопарк", "netflix", "spotify"]),
+    ("Одяг",            ["одяг", "взуття", "куртка", "штани", "сорочка",
+                         "шопінг", "кросівки", "сукня", "одягу"]),
+    ("Підписки",        ["підписка", "програм", "сервіс", "курс", "онлайн",
+                         "software", "додаток", "app", "хостинг"]),
 ]
 
 # ─── Voice (optional) ─────────────────────────────────────────────────────────
@@ -353,26 +359,28 @@ def create_single_record(text: str, category: str, date_iso: str | None) -> tupl
         return notion_create("ідеї", props), label
 
     if category == "витрата":
-        exp_cat  = detect_expense_category(text)
-        cat_id   = BUDGET_CAT_IDS.get(exp_cat, BUDGET_CAT_IDS["Інше"])
+        exp_cat = detect_expense_category(text)
+        cat_id  = BUDGET_CAT_IDS.get(exp_cat, BUDGET_CAT_IDS["Інше"])
         props = {
-            "Description":   title_prop(text),
-            "Date":          date_prop(date_iso or today_iso()),
-            "Budget Category": relation_prop(cat_id),
+            "Деталі":    title_prop(text),
+            "Дата":      date_prop(date_iso or today_iso()),
+            "Тип":       relation_prop(EXPENSE_TYPE_ID),
+            "Категорія": relation_prop(cat_id),
         }
         if amount:
-            props["Amount"] = number_prop(amount)
-        ok = notion_create("expenses", props)
+            props["Сума"] = number_prop(amount)
+        ok = notion_create("транзакції", props)
         return ok, f"💸 Витрата [{exp_cat}]"
 
     if category == "дохід":
         props = {
-            "Income": title_prop(text),
-            "Date":   date_prop(date_iso or today_iso()),
+            "Деталі": title_prop(text),
+            "Дата":   date_prop(date_iso or today_iso()),
+            "Тип":    relation_prop(INCOME_TYPE_ID),
         }
         if amount:
-            props["Amount"] = number_prop(amount)
-        return notion_create("income", props), label
+            props["Сума"] = number_prop(amount)
+        return notion_create("транзакції", props), label
 
     if category == "задачі":
         d = date_iso or today_iso()
@@ -625,27 +633,22 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     month_filter = {
         "and": [
-            {"property": "Date", "date": {"on_or_after": month_start}},
-            {"property": "Date", "date": {"before":      month_end}},
+            {"property": "Дата", "date": {"on_or_after": month_start}},
+            {"property": "Дата", "date": {"before":      month_end}},
         ]
     }
 
-    expenses_rows = notion_query("expenses", filter_obj=month_filter)
-    income_rows   = notion_query("income",   filter_obj={
-        "and": [
-            {"property": "Date", "date": {"on_or_after": month_start}},
-            {"property": "Date", "date": {"before":      month_end}},
-        ]
-    })
+    rows = notion_query("транзакції", filter_obj=month_filter)
 
-    expense = sum(
-        (r.get("properties", {}).get("Amount", {}).get("number") or 0)
-        for r in expenses_rows
-    )
-    income = sum(
-        (r.get("properties", {}).get("Amount", {}).get("number") or 0)
-        for r in income_rows
-    )
+    income = expense = 0.0
+    for r in rows:
+        props = r.get("properties", {})
+        сума  = props.get("Сума", {}).get("number") or 0
+        тип   = [rel["id"] for rel in props.get("Тип", {}).get("relation", [])]
+        if INCOME_TYPE_ID in тип:
+            income += сума
+        elif EXPENSE_TYPE_ID in тип:
+            expense += сума
 
     balance = income - expense
     sign    = "+" if balance >= 0 else ""
@@ -662,10 +665,10 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def cmd_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     now = datetime.now()
-    rows = notion_query("budget_categories")
+    rows = notion_query("місячний_бюджет")
 
     if not rows:
-        await update.message.reply_text("📊 Budget Categories порожній.")
+        await update.message.reply_text("📊 Місячний бюджет порожній.")
         return
 
     lines = [f"📊 Бюджет за {MONTHS_UK[now.month]} {now.year}:\n"]
@@ -674,24 +677,20 @@ async def cmd_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     for item in rows:
         props = item.get("properties", {})
 
-        # Category name
         cat = "".join(
             b.get("plain_text", "")
-            for b in props.get("Category", {}).get("title", [])
+            for b in props.get("Name", {}).get("title", [])
         )
-
-        budget = props.get("Budget", {}).get("number") or 0.0
-
-        # Actual — rollup повертає число
-        actual_raw = props.get("Actual", {}).get("rollup", {})
-        actual = actual_raw.get("number") or 0.0
+        budget = props.get("Amount", {}).get("number") or 0.0
+        this_month = props.get("This Month", {}).get("formula", {})
+        actual = this_month.get("number") or 0.0
 
         diff = budget - actual
         diff_str = f"+{diff:,.0f}" if diff >= 0 else f"{diff:,.0f}"
         status = "🟢" if diff >= 0 else "🔴"
 
         lines.append(
-            f"{status} {cat}: витрачено {actual:,.0f} / ліміт {budget:,.0f} грн  ({diff_str} грн)"
+            f"{status} {cat}: {actual:,.0f} / {budget:,.0f} грн  ({diff_str})"
         )
         total_budget += budget
         total_actual += actual
@@ -699,7 +698,7 @@ async def cmd_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     total_diff = total_budget - total_actual
     diff_str   = f"+{total_diff:,.0f}" if total_diff >= 0 else f"{total_diff:,.0f}"
     lines.append(f"\n{'─' * 30}")
-    lines.append(f"Всього: {total_actual:,.0f} / {total_budget:,.0f} грн  ({diff_str} грн)")
+    lines.append(f"Всього: {total_actual:,.0f} / {total_budget:,.0f} грн  ({diff_str})")
 
     await update.message.reply_text("\n".join(lines))
 
@@ -710,11 +709,11 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Просто напиши або надішли голосове — я визначу куди записати:\n\n"
         "💡 *Ідеї*\n"
         "  ідея, думка, що якщо\n\n"
-        "💸 *Витрата* → Expenses\n"
+        "💸 *Витрата* → Транзакції (тип: Витрата)\n"
         "  купив, заплатив, потратив, витрата\n"
         "  Категорія визначається автоматично:\n"
-        "  їжа / транспорт / дім / здоров'я / розваги / одяг / комунальні / інструменти\n\n"
-        "💚 *Дохід* → Source of Income\n"
+        "  їжа та кафе / транспорт / комунальні / розваги та спорт / одяг / підписки\n\n"
+        "💚 *Дохід* → Транзакції (тип: Дохід)\n"
         "  отримав, заробив, прийшло, дохід\n\n"
         "✅ *Задача*\n"
         "  треба, зробити, нагадай, задача\n\n"
