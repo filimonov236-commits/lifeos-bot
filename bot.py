@@ -47,12 +47,14 @@ NOTION_API = "https://api.notion.com/v1"
 # ─── Database IDs ─────────────────────────────────────────────────────────────
 DB = {
     "ідеї":             "375c228f-5e9f-81c4-9a3b-dc64cf71186a",
-    "задачі":           "375c228f-5e9f-8193-9ef4-ddfb51fbb6c3",
+    "задачі":           "377c228f-5e9f-8149-adbb-d919e4c74895",  # Habit Tracker
     "тренування":       "375c228f-5e9f-813a-b77e-ce1093e38893",
     "проекти":          "375c228f-5e9f-8192-9cb3-e24ed61e799f",
     "звички":           "375c228f-5e9f-81e1-ab37-cb11eecbd78a",
     "люди":             "375c228f-5e9f-81f4-91f4-d3b84d05db6a",
-    # ── Фінанси (нові) ──────────────────────────────────────────────────────
+    "monthly_overview": "377c228f-5e9f-819b-8cb3-f413ace81b82",
+    "the_streak":       "377c228f-5e9f-812d-ac58-ef304579a92b",
+    # ── Фінанси ─────────────────────────────────────────────────────────────
     "expenses":         "376c228f-5e9f-8186-b4ad-d8b4205e7c16",
     "budget_categories":"376c228f-5e9f-818b-8e82-d1dce4cec889",
     "income":           "376c228f-5e9f-8100-8a76-eb860867d186",
@@ -334,9 +336,13 @@ def create_single_record(text: str, category: str, date_iso: str | None) -> tupl
         return notion_create("income", props), label
 
     if category == "задачі":
-        props = {"Назва": title_prop(text), "Статус": select_prop("⬜ Не почато")}
-        if date_iso:
-            props["Дата"] = date_prop(date_iso)
+        d = date_iso or today_iso()
+        props = {
+            "Name": title_prop(d),
+            "Date": date_prop(d),
+        }
+        if text:
+            props["Notes"] = {"rich_text": [{"type": "text", "text": {"content": text[:2000]}}]}
         return notion_create("задачі", props), label
 
     if category == "тренування":
@@ -455,35 +461,58 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+HABITS_LIST = [
+    "Sleep 7-8 hours",
+    "Eat healthy meals",
+    "Exercise 30 minutes",
+    "Journal & self-reflect",
+    "No porn/alcohol",
+    "Plan tomorrow's tasks",
+    "Read 30 minutes",
+    "Social media ≤90min",
+    "Study ≥2 hours",
+    "Drink 2L water",
+]
+
+
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     today = today_iso()
     results = notion_query(
         "задачі",
-        filter_obj={
-            "and": [
-                {"property": "Дата",   "date":   {"equals":         today}},
-                {"property": "Статус", "select": {"does_not_equal": "✅ Готово"}},
-            ]
-        },
-        sorts=[{"property": "Пріоритет", "direction": "ascending"}],
+        filter_obj={"property": "Date", "date": {"equals": today}},
     )
+
+    d = date.fromisoformat(today)
+    date_label = f"{d.day} {MONTHS_UK_GEN[d.month]}"
 
     if not results:
         await update.message.reply_text(
-            f"📅 Задач на сьогодні ({today}) немає!\n"
-            "🎉 Список порожній або все виконано."
+            f"📅 Запис на {date_label} ще не створено.\n"
+            "Відкрий Habit Tracker у Notion щоб додати запис."
         )
         return
 
-    lines = [f"📅 Задачі на {today}:\n"]
-    priority_icons = {"🔴 Критично": "🔴", "🟡 Важливо": "🟡", "🟢 Колись": "🟢"}
-    for item in results:
-        props  = item.get("properties", {})
-        title  = get_title(item)
-        status = props.get("Статус",    {}).get("select", {}).get("name", "—")
-        prio   = props.get("Пріоритет", {}).get("select", {}).get("name", "")
-        icon   = priority_icons.get(prio, "•")
-        lines.append(f"{icon} {title}  [{status}]")
+    entry = results[0]
+    props = entry.get("properties", {})
+
+    lines = [f"📅 Звички на {date_label}:\n"]
+    done = 0
+    for habit in HABITS_LIST:
+        checked = props.get(habit, {}).get("checkbox", False)
+        icon = "✅" if checked else "❌"
+        lines.append(f"{icon} {habit}")
+        if checked:
+            done += 1
+
+    pct = done * 10
+    filled = "⬛" * done + "⬜" * (10 - done)
+    lines.append(f"\n{filled} {pct}%")
+
+    notes_blocks = props.get("Notes", {}).get("rich_text", [])
+    if notes_blocks:
+        note_text = "".join(b.get("plain_text", "") for b in notes_blocks)
+        if note_text:
+            lines.append(f"📝 {note_text}")
 
     await update.message.reply_text("\n".join(lines))
 
@@ -598,7 +627,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "📅 Дати: «завтра», «в п'ятницю», «через 3 дні», «сьогодні»\n\n"
         "─────────────────────\n"
         "⌨️ *Команди:*\n"
-        "/today — задачі на сьогодні\n"
+        "/today — звички на сьогодні\n"
         "/balance — доходи / витрати / баланс за місяць\n"
         "/budget — бюджет по категоріях\n"
         "/help — ця довідка",
