@@ -47,13 +47,13 @@ NOTION_API = "https://api.notion.com/v1"
 # ─── Database IDs ─────────────────────────────────────────────────────────────
 DB = {
     "ідеї":             "375c228f-5e9f-81c4-9a3b-dc64cf71186a",
-    "задачі":           "377c228f-5e9f-8149-adbb-d919e4c74895",  # Habit Tracker
+    "задачі":           "65ec228f-5e9f-831f-a2dd-81bcf445f6e9",  # Habit Tracker (template)
     "тренування":       "375c228f-5e9f-813a-b77e-ce1093e38893",
     "проекти":          "375c228f-5e9f-8192-9cb3-e24ed61e799f",
     "звички":           "375c228f-5e9f-81e1-ab37-cb11eecbd78a",
     "люди":             "375c228f-5e9f-81f4-91f4-d3b84d05db6a",
-    "monthly_overview": "377c228f-5e9f-819b-8cb3-f413ace81b82",
-    "the_streak":       "377c228f-5e9f-812d-ac58-ef304579a92b",
+    "monthly_overview": "facc228f-5e9f-83b5-9221-01e85e270842",
+    "the_streak":       "bbac228f-5e9f-82a7-b2b1-81ad2afeb4df",
     # ── Фінанси ─────────────────────────────────────────────────────────────
     "expenses":         "376c228f-5e9f-8186-b4ad-d8b4205e7c16",
     "budget_categories":"376c228f-5e9f-818b-8e82-d1dce4cec889",
@@ -464,14 +464,27 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 HABITS_LIST = [
     "Sleep 7-8 hours",
     "Eat healthy meals",
-    "Exercise 30 minutes",
-    "Journal & self-reflect",
+    "Exercise 30 minutes ",   # trailing space — matches DB property name
+    "Journal & self-reflect ", # trailing space
     "No porn/alcohol",
     "Plan tomorrow's tasks",
     "Read 30 minutes",
-    "Social media ≤90min",
-    "Study ≥2 hours",
-    "Drink 2L water",
+    "Social media ≤ 90min",   # space before 90
+    "Study ≥ 2 hours",        # space before 2
+    "Drink 2L water ",         # trailing space
+]
+
+HABITS_DISPLAY = [
+    "Sleep 7-8 hours 💤",
+    "Eat healthy meals 🥗",
+    "Exercise 30 minutes 🏋️",
+    "Journal & self-reflect 🖋️",
+    "No porn/alcohol 🚫",
+    "Plan tomorrow's tasks 📋",
+    "Read 30 minutes 📖",
+    "Social media ≤90min 📱",
+    "Study ≥2 hours 💻",
+    "Drink 2L water 💧",
 ]
 
 
@@ -497,10 +510,10 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     lines = [f"📅 Звички на {date_label}:\n"]
     done = 0
-    for habit in HABITS_LIST:
+    for habit, display in zip(HABITS_LIST, HABITS_DISPLAY):
         checked = props.get(habit, {}).get("checkbox", False)
         icon = "✅" if checked else "❌"
-        lines.append(f"{icon} {habit}")
+        lines.append(f"{icon} {display}")
         if checked:
             done += 1
 
