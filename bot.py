@@ -13,9 +13,10 @@ from datetime import datetime, date, timedelta
 
 import requests
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     MessageHandler,
     filters,
@@ -283,6 +284,44 @@ def notion_create(db_key: str, properties: dict) -> bool:
     return resp.status_code == 200
 
 
+def notion_create_page(db_key: str, properties: dict) -> dict | None:
+    resp = requests.post(
+        f"{NOTION_API}/pages",
+        headers=NOTION_HEADERS,
+        json={"parent": {"database_id": DB[db_key]}, "properties": properties},
+        timeout=10,
+    )
+    if resp.status_code != 200:
+        logger.error(f"Notion create error {resp.status_code}: {resp.text[:300]}")
+        return None
+    return resp.json()
+
+
+def notion_get_page(page_id: str) -> dict | None:
+    resp = requests.get(
+        f"{NOTION_API}/pages/{page_id}",
+        headers=NOTION_HEADERS,
+        timeout=10,
+    )
+    if resp.status_code != 200:
+        logger.error(f"Notion get page error: {resp.text[:200]}")
+        return None
+    return resp.json()
+
+
+def notion_patch_page(page_id: str, properties: dict) -> dict | None:
+    resp = requests.patch(
+        f"{NOTION_API}/pages/{page_id}",
+        headers=NOTION_HEADERS,
+        json={"properties": properties},
+        timeout=10,
+    )
+    if resp.status_code != 200:
+        logger.error(f"Notion patch error: {resp.text[:200]}")
+        return None
+    return resp.json()
+
+
 def notion_query(db_key: str, filter_obj: dict | None = None,
                  sorts: list | None = None) -> list:
     body: dict = {"page_size": 100}
@@ -488,46 +527,93 @@ HABITS_DISPLAY = [
 ]
 
 
+def _habits_text(props: dict, date_label: str) -> str:
+    done = sum(1 for h in HABITS_LIST if props.get(h, {}).get("checkbox", False))
+    pct  = done * 10
+    bar  = "⬛" * done + "⬜" * (10 - done)
+    text = f"📅 Звички на {date_label}:\n{bar} {pct}%  ({done}/10)"
+    notes = props.get("Notes", {}).get("rich_text", [])
+    if notes:
+        note_text = "".join(b.get("plain_text", "") for b in notes)
+        if note_text:
+            text += f"\n📝 {note_text}"
+    return text
+
+
+def _habits_keyboard(props: dict, page_id: str) -> InlineKeyboardMarkup:
+    rows = []
+    for i, (habit, display) in enumerate(zip(HABITS_LIST, HABITS_DISPLAY)):
+        checked = props.get(habit, {}).get("checkbox", False)
+        icon = "✅" if checked else "◻️"
+        rows.append([InlineKeyboardButton(
+            f"{icon} {display}",
+            callback_data=f"h_{i}_{page_id}",
+        )])
+    return InlineKeyboardMarkup(rows)
+
+
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     today = today_iso()
+    d = date.fromisoformat(today)
+    date_label = f"{d.day} {MONTHS_UK_GEN[d.month]}"
+
     results = notion_query(
         "задачі",
         filter_obj={"property": "Date", "date": {"equals": today}},
     )
 
-    d = date.fromisoformat(today)
-    date_label = f"{d.day} {MONTHS_UK_GEN[d.month]}"
+    if results:
+        entry = results[0]
+    else:
+        entry = notion_create_page("задачі", {
+            "Name": title_prop(today),
+            "Date": date_prop(today),
+        })
+        if not entry:
+            await update.message.reply_text("❌ Не вдалося створити запис на сьогодні.")
+            return
 
-    if not results:
-        await update.message.reply_text(
-            f"📅 Запис на {date_label} ще не створено.\n"
-            "Відкрий Habit Tracker у Notion щоб додати запис."
-        )
+    page_id = entry["id"]
+    props   = entry.get("properties", {})
+
+    await update.message.reply_text(
+        _habits_text(props, date_label),
+        reply_markup=_habits_keyboard(props, page_id),
+    )
+
+
+async def habit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split("_", 2)   # h_{idx}_{page_id}
+    if len(parts) != 3 or parts[0] != "h":
         return
 
-    entry = results[0]
-    props = entry.get("properties", {})
+    idx     = int(parts[1])
+    page_id = parts[2]
+    habit   = HABITS_LIST[idx]
 
-    lines = [f"📅 Звички на {date_label}:\n"]
-    done = 0
-    for habit, display in zip(HABITS_LIST, HABITS_DISPLAY):
-        checked = props.get(habit, {}).get("checkbox", False)
-        icon = "✅" if checked else "❌"
-        lines.append(f"{icon} {display}")
-        if checked:
-            done += 1
+    page = notion_get_page(page_id)
+    if not page:
+        await query.answer("❌ Помилка читання", show_alert=True)
+        return
 
-    pct = done * 10
-    filled = "⬛" * done + "⬜" * (10 - done)
-    lines.append(f"\n{filled} {pct}%")
+    current = page.get("properties", {}).get(habit, {}).get("checkbox", False)
+    updated = notion_patch_page(page_id, {habit: {"checkbox": not current}})
+    if not updated:
+        await query.answer("❌ Помилка оновлення", show_alert=True)
+        return
 
-    notes_blocks = props.get("Notes", {}).get("rich_text", [])
-    if notes_blocks:
-        note_text = "".join(b.get("plain_text", "") for b in notes_blocks)
-        if note_text:
-            lines.append(f"📝 {note_text}")
+    updated_props = updated.get("properties", {})
+    date_str  = updated_props.get("Date", {}).get("date", {}).get("start", today_iso())
+    d         = date.fromisoformat(date_str)
+    date_label = f"{d.day} {MONTHS_UK_GEN[d.month]}"
 
-    await update.message.reply_text("\n".join(lines))
+    await query.edit_message_text(
+        _habits_text(updated_props, date_label),
+        reply_markup=_habits_keyboard(updated_props, page_id),
+    )
 
 
 async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -640,7 +726,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "📅 Дати: «завтра», «в п'ятницю», «через 3 дні», «сьогодні»\n\n"
         "─────────────────────\n"
         "⌨️ *Команди:*\n"
-        "/today — звички на сьогодні\n"
+        "/today — звички на сьогодні (кнопки для відмітки)\n"
         "/balance — доходи / витрати / баланс за місяць\n"
         "/budget — бюджет по категоріях\n"
         "/help — ця довідка",
@@ -657,6 +743,7 @@ def main() -> None:
     app.add_handler(CommandHandler("today",   cmd_today))
     app.add_handler(CommandHandler("balance", cmd_balance))
     app.add_handler(CommandHandler("budget",  cmd_budget))
+    app.add_handler(CallbackQueryHandler(habit_callback, pattern=r"^h_\d+_.+"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
