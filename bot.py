@@ -61,11 +61,17 @@ DB = {
     "аналіз":           "f39c228f-5e9f-829f-81ee-81b3c0bf9a9c",
 }
 
-# Категорії витрат (ім'я → ім'я, без Notion page IDs — relations не пишуться через API)
-BUDGET_CATEGORIES = [
-    "Їжа та кафе", "Транспорт", "Комунальні", "Розваги та спорт",
-    "Одяг", "Підписки", "Зарплата", "Інше",
+# Категорії витрат з іконками
+EXPENSE_CATEGORIES: list[tuple[str, str]] = [
+    ("Їжа та кафе",      "🍕"),
+    ("Транспорт",        "🚌"),
+    ("Комунальні",       "🏠"),
+    ("Розваги та спорт", "🎭"),
+    ("Одяг",             "👕"),
+    ("Підписки",         "📱"),
+    ("Інше",             "📦"),
 ]
+EXPENSE_CAT_ICONS = dict(EXPENSE_CATEGORIES)
 
 # Ключові слова для визначення категорії витрати
 EXPENSE_CAT_KEYWORDS: list[tuple[str, list[str]]] = [
@@ -396,10 +402,45 @@ def _record_line(text: str, label: str, date_iso: str | None, amount: float | No
 
 
 # ─── Обробка повідомлення ─────────────────────────────────────────────────────
-async def process_text(update: Update, text: str) -> None:
+async def process_text(update: Update, text: str,
+                       context: ContextTypes.DEFAULT_TYPE | None = None) -> None:
     parts = split_message(text)
+
+    # ── Single-part interactive flow ─────────────────────────────────────────
+    if len(parts) == 1 and context is not None:
+        part     = parts[0]
+        category = detect_category(part)
+        amount   = parse_amount(part)
+        date_iso = parse_date_from_text(part)
+
+        if category == "витрата":
+            auto_cat = detect_expense_category(part)
+            context.user_data["pending_tx"] = {
+                "text": part, "amount": amount, "date_iso": date_iso,
+            }
+            amt = f"  —  {amount:,.0f} грн" if amount else ""
+            await update.message.reply_text(
+                f"💸 Витрата{amt}\nОберіть категорію:",
+                reply_markup=_category_keyboard(auto_cat),
+            )
+            return
+
+        if category is None and amount:
+            context.user_data["pending_tx"] = {
+                "text": part, "amount": amount, "date_iso": date_iso,
+            }
+            amt = f"  —  {amount:,.0f} грн"
+            short = part[:50] + ("…" if len(part) > 50 else "")
+            await update.message.reply_text(
+                f"❓ *«{short}»*  {amt}\nЩо це?",
+                reply_markup=_type_keyboard(),
+                parse_mode="Markdown",
+            )
+            return
+
+    # ── Multi-part or non-financial: auto-process ─────────────────────────────
     lines: list[str] = []
-    any_recognized = False
+    any_recognized   = False
 
     for part in parts:
         category = detect_category(part)
@@ -434,7 +475,7 @@ async def process_text(update: Update, text: str) -> None:
 
 # ─── Handlers ─────────────────────────────────────────────────────────────────
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await process_text(update, update.message.text.strip())
+    await process_text(update, update.message.text.strip(), context)
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -463,7 +504,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         text = recognizer.recognize_google(audio_data, language="uk-UA")
         await update.message.reply_text(f"🎤 Розпізнано: «{text}»")
-        await process_text(update, text)
+        await process_text(update, text, context)
 
     except sr.UnknownValueError:
         await update.message.reply_text("❌ Не вдалося розпізнати. Спробуй чіткіше або текстом.")
@@ -615,12 +656,148 @@ def _month_range() -> tuple[str, str]:
 
 
 def _parse_tx_note(props: dict) -> tuple[str, str]:
-    """Parse Примітка 'тип|категорія' → (тип, категорія)."""
     note = "".join(t.get("plain_text", "") for t in props.get("Примітка", {}).get("rich_text", []))
     parts = note.split("|", 1)
-    тип  = parts[0].strip() if parts else ""
-    кат  = parts[1].strip() if len(parts) > 1 else ""
+    тип = parts[0].strip() if parts else ""
+    кат = parts[1].strip() if len(parts) > 1 else ""
     return тип, кат
+
+
+def _type_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💸 Витрата",   callback_data="tx_t_витрата"),
+            InlineKeyboardButton("💚 Дохід",     callback_data="tx_t_дохід"),
+        ],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="tx_cancel")],
+    ])
+
+
+def _category_keyboard(auto_cat: str | None = None) -> InlineKeyboardMarkup:
+    rows = []
+    cats = EXPENSE_CATEGORIES  # list of (name, icon)
+    for i in range(0, len(cats), 2):
+        row = []
+        for name, icon in cats[i:i + 2]:
+            mark = " ✓" if name == auto_cat else ""
+            row.append(InlineKeyboardButton(
+                f"{icon} {name}{mark}",
+                callback_data=f"tx_c_{name}",
+            ))
+        rows.append(row)
+    rows.append([InlineKeyboardButton("❌ Скасувати", callback_data="tx_cancel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _budget_status(cat: str, new_amount: float) -> str:
+    """Return budget warning line for a category after adding new_amount, or ''."""
+    start, end = _month_range()
+    rows = notion_query("транзакції", filter_obj={
+        "and": [
+            {"property": "Дата", "date": {"on_or_after": start}},
+            {"property": "Дата", "date": {"before":      end}},
+        ]
+    })
+    spent = new_amount
+    for r in rows:
+        props = r.get("properties", {})
+        тип, кат = _parse_tx_note(props)
+        if тип == "витрата" and кат == cat:
+            spent += props.get("Сума", {}).get("number") or 0
+
+    budget_rows = notion_query("місячний_бюджет")
+    limit = 0.0
+    for br in budget_rows:
+        bcat = "".join(b.get("plain_text", "") for b in
+                       br.get("properties", {}).get("Name", {}).get("title", []))
+        if bcat == cat:
+            limit = br.get("properties", {}).get("Amount", {}).get("number") or 0.0
+            break
+
+    if limit <= 0:
+        return ""
+    remaining = limit - spent
+    pct = spent / limit * 100
+    icon = EXPENSE_CAT_ICONS.get(cat, "📦")
+    if remaining < 0:
+        return f"\n🔴 Ліміт {icon} {cat} перевищено! {spent:,.0f} / {limit:,.0f} грн"
+    if pct >= 80:
+        return f"\n⚠️ {icon} {cat}: залишок {remaining:,.0f} грн ({pct:.0f}% використано)"
+    return f"\n💚 {icon} {cat}: залишок {remaining:,.0f} / {limit:,.0f} грн"
+
+
+async def tx_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    data  = query.data
+
+    if data == "tx_cancel":
+        context.user_data.pop("pending_tx", None)
+        await query.edit_message_text("❌ Скасовано.")
+        return
+
+    # ── Обрано тип ────────────────────────────────────────────────────────────
+    if data in ("tx_t_витрата", "tx_t_дохід"):
+        pending = context.user_data.get("pending_tx")
+        if not pending:
+            await query.edit_message_text("⏱ Сесія закінчилась. Надішли повідомлення ще раз.")
+            return
+
+        if data == "tx_t_дохід":
+            props: dict = {
+                "Деталі":   title_prop(pending["text"]),
+                "Дата":     date_prop(pending.get("date_iso") or today_iso()),
+                "Примітка": {"rich_text": [{"text": {"content": "дохід|"}}]},
+            }
+            if pending.get("amount"):
+                props["Сума"] = number_prop(pending["amount"])
+            ok = notion_create("транзакції", props)
+            context.user_data.pop("pending_tx", None)
+            amt = f" — {pending['amount']:,.0f} грн" if pending.get("amount") else ""
+            await query.edit_message_text(
+                f"✅ Дохід записано{amt}" if ok else "❌ Помилка запису в Notion"
+            )
+            return
+
+        # витрата → показати категорії
+        auto_cat = detect_expense_category(pending["text"])
+        pending["auto_cat"] = auto_cat
+        amt = f"  —  {pending['amount']:,.0f} грн" if pending.get("amount") else ""
+        await query.edit_message_text(
+            f"💸 Витрата{amt}\nОберіть категорію:",
+            reply_markup=_category_keyboard(auto_cat),
+        )
+        return
+
+    # ── Обрано категорію ──────────────────────────────────────────────────────
+    if data.startswith("tx_c_"):
+        cat     = data[5:]
+        pending = context.user_data.get("pending_tx")
+        if not pending:
+            await query.edit_message_text("⏱ Сесія закінчилась. Надішли повідомлення ще раз.")
+            return
+
+        props = {
+            "Деталі":   title_prop(pending["text"]),
+            "Дата":     date_prop(pending.get("date_iso") or today_iso()),
+            "Примітка": {"rich_text": [{"text": {"content": f"витрата|{cat}"}}]},
+        }
+        amount = pending.get("amount")
+        if amount:
+            props["Сума"] = number_prop(amount)
+        ok = notion_create("транзакції", props)
+        context.user_data.pop("pending_tx", None)
+
+        if not ok:
+            await query.edit_message_text("❌ Помилка запису в Notion")
+            return
+
+        icon    = EXPENSE_CAT_ICONS.get(cat, "📦")
+        amt_str = f" — {amount:,.0f} грн" if amount else ""
+        warning = _budget_status(cat, amount or 0)
+        await query.edit_message_text(
+            f"✅ Витрата [{icon} {cat}]{amt_str}{warning}"
+        )
 
 
 async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -781,6 +958,7 @@ def main() -> None:
     app.add_handler(CommandHandler("budget",       cmd_budget))
     app.add_handler(CommandHandler("transactions", cmd_transactions))
     app.add_handler(CallbackQueryHandler(habit_callback, pattern=r"^h_\d+_.+"))
+    app.add_handler(CallbackQueryHandler(tx_callback,    pattern=r"^tx_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
