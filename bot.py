@@ -15,7 +15,11 @@ from datetime import datetime, date, timedelta
 import requests
 from aiohttp import web
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update, BotCommand,
+    InlineKeyboardButton, InlineKeyboardMarkup,
+    KeyboardButton, ReplyKeyboardMarkup,
+)
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -48,6 +52,13 @@ _chat_ids: set[int] = {CHAT_ID} if CHAT_ID else set()
 
 # Deduplicates Monobank events: Mono sends hold=True then hold=False for the same tx
 _seen_mono_ids: set[str] = set()
+
+# Persistent keyboard — always visible above the input field
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [["🗂 Меню"]],
+    resize_keyboard=True,
+    is_persistent=True,
+)
 
 NOTION_HEADERS = {
     "Authorization":  f"Bearer {NOTION_TOKEN}",
@@ -521,6 +532,11 @@ async def process_text(update: Update, text: str,
 # ─── Handlers ─────────────────────────────────────────────────────────────────
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text     = update.message.text.strip()
+
+    if text == "🗂 Меню":
+        await cmd_menu(update, context)
+        return
+
     awaiting = context.user_data.pop("awaiting", None)
 
     if awaiting == "витрата":
@@ -610,7 +626,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Привіт, {name}! 👋\n\n"
         "Я твій асистент для Notion Life OS.\n"
         "Надсилай текст або голосове — запишу у потрібну базу.\n\n"
-        "📋 /help — всі команди і ключові слова"
+        "📋 /help — всі команди і ключові слова",
+        reply_markup=MAIN_KEYBOARD,
     )
 
 
@@ -1471,6 +1488,17 @@ async def _webhook_main() -> None:
         tg_url = f"{RENDER_URL}/{TELEGRAM_TOKEN}"
         await ptb_app.bot.set_webhook(tg_url)
         logger.info(f"🌐 TG webhook → {tg_url}")
+        await ptb_app.bot.set_my_commands([
+            BotCommand("menu",         "🗂 Головне меню"),
+            BotCommand("today",        "📅 Звички на сьогодні"),
+            BotCommand("yesterday",    "📅 Звички за вчора"),
+            BotCommand("week",         "🗓 Тижнева таблиця звичок"),
+            BotCommand("balance",      "💰 Баланс за місяць"),
+            BotCommand("budget",       "📊 Бюджет по категоріях"),
+            BotCommand("transactions", "🧾 Останні транзакції"),
+            BotCommand("help",         "❓ Довідка"),
+            BotCommand("setmono",      "🔗 Перереєстрація Monobank"),
+        ])
         await ptb_app.start()
         runner = web.AppRunner(aio)
         await runner.setup()
