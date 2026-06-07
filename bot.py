@@ -117,6 +117,7 @@ MONTHS_UK_GEN = [
     "", "січня", "лютого", "березня", "квітня", "травня", "червня",
     "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",
 ]
+DAY_ABBR_UK = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 
 DAYS_UA: dict[str, int] = {
     "понеділок": 0, "понеділка": 0,
@@ -570,15 +571,19 @@ def _habits_text(props: dict, date_label: str) -> str:
     return text
 
 
-def _habits_keyboard(props: dict, page_id: str) -> InlineKeyboardMarkup:
+def _habits_keyboard(props: dict, page_id: str,
+                     from_week: bool = False) -> InlineKeyboardMarkup:
+    prefix = "hw" if from_week else "h"
     rows = []
     for i, (habit, display) in enumerate(zip(HABITS_LIST, HABITS_DISPLAY)):
         checked = props.get(habit, {}).get("checkbox", False)
         icon = "✅" if checked else "◻️"
         rows.append([InlineKeyboardButton(
             f"{icon} {display}",
-            callback_data=f"h_{i}_{page_id}",
+            callback_data=f"{prefix}_{i}_{page_id}",
         )])
+    if from_week:
+        rows.append([InlineKeyboardButton("📅 До тижня", callback_data="week_back")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -616,13 +621,14 @@ async def habit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     query = update.callback_query
     await query.answer()
 
-    parts = query.data.split("_", 2)   # h_{idx}_{page_id}
-    if len(parts) != 3 or parts[0] != "h":
+    parts = query.data.split("_", 2)   # h_{idx}_{page_id}  or  hw_{idx}_{page_id}
+    if len(parts) != 3 or parts[0] not in ("h", "hw"):
         return
 
-    idx     = int(parts[1])
-    page_id = parts[2]
-    habit   = HABITS_LIST[idx]
+    from_week = parts[0] == "hw"
+    idx       = int(parts[1])
+    page_id   = parts[2]
+    habit     = HABITS_LIST[idx]
 
     page = notion_get_page(page_id)
     if not page:
@@ -642,7 +648,117 @@ async def habit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     await query.edit_message_text(
         _habits_text(updated_props, date_label),
-        reply_markup=_habits_keyboard(updated_props, page_id),
+        reply_markup=_habits_keyboard(updated_props, page_id, from_week=from_week),
+    )
+
+
+def _get_week_data() -> tuple[str, InlineKeyboardMarkup]:
+    today   = date.today()
+    monday  = today - timedelta(days=today.weekday())
+    week    = [monday + timedelta(days=i) for i in range(7)]
+
+    results = notion_query("задачі", filter_obj={
+        "and": [
+            {"property": "Date", "date": {"on_or_after":  week[0].isoformat()}},
+            {"property": "Date", "date": {"on_or_before": week[-1].isoformat()}},
+        ]
+    })
+    entries: dict[str, dict] = {}
+    for r in results:
+        d = (r.get("properties", {}).get("Date", {}).get("date") or {}).get("start", "")
+        if d:
+            entries[d] = r
+
+    # Header: handle month boundary
+    s, e = week[0], week[-1]
+    if s.month == e.month:
+        header = f"📅 Тиждень {s.day}–{e.day} {MONTHS_UK_GEN[s.month]}:"
+    else:
+        header = (f"📅 Тиждень {s.day} {MONTHS_UK_GEN[s.month]}"
+                  f" – {e.day} {MONTHS_UK_GEN[e.month]}:")
+
+    lines = [header, ""]
+    total_done = days_logged = 0
+
+    for d in week:
+        iso   = d.isoformat()
+        abbr  = DAY_ABBR_UK[d.weekday()]
+        today_mark = " ◀" if d == today else ""
+
+        if iso in entries:
+            props = entries[iso].get("properties", {})
+            done  = sum(1 for h in HABITS_LIST if props.get(h, {}).get("checkbox", False))
+            bar   = "⬛" * done + "⬜" * (10 - done)
+            star  = " ⭐" if done == 10 else ""
+            lines.append(f"{abbr} {d.day:02d}  {bar}  {done}/10{star}{today_mark}")
+            if d <= today:
+                total_done += done
+                days_logged += 1
+        elif d <= today:
+            lines.append(f"{abbr} {d.day:02d}  ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜  —{today_mark}")
+        else:
+            lines.append(f"{abbr} {d.day:02d}  · · · · · · · · · ·{today_mark}")
+
+    if days_logged > 0:
+        avg  = total_done / days_logged
+        pct  = avg * 10
+        lines.append(f"\n📊 Середнє: {avg:.1f}/10  ({pct:.0f}%) за {days_logged} дн.")
+
+    lines.append("Тисни на день щоб відмітити:")
+
+    btns = [
+        InlineKeyboardButton(
+            f"{DAY_ABBR_UK[d.weekday()]} {d.day}",
+            callback_data=f"week_d_{d.isoformat()}",
+        )
+        for d in week
+    ]
+    keyboard = InlineKeyboardMarkup([btns[:4], btns[4:]])
+    return "\n".join(lines), keyboard
+
+
+async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text, keyboard = _get_week_data()
+    await update.message.reply_text(text, reply_markup=keyboard)
+
+
+async def week_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    data  = query.data
+
+    # ── Back to week view ─────────────────────────────────────────────────────
+    if data == "week_back":
+        text, keyboard = _get_week_data()
+        await query.edit_message_text(text, reply_markup=keyboard)
+        return
+
+    # ── Open a specific day ───────────────────────────────────────────────────
+    # data = "week_d_2026-06-07"
+    iso = data[7:]                          # strip "week_d_"
+    d   = date.fromisoformat(iso)
+    date_label = f"{d.day} {MONTHS_UK_GEN[d.month]}"
+
+    results = notion_query(
+        "задачі",
+        filter_obj={"property": "Date", "date": {"equals": iso}},
+    )
+    if results:
+        entry = results[0]
+    else:
+        entry = notion_create_page("задачі", {
+            "Name": title_prop(iso),
+            "Date": date_prop(iso),
+        })
+        if not entry:
+            await query.answer("❌ Не вдалося відкрити день", show_alert=True)
+            return
+
+    page_id = entry["id"]
+    props   = entry.get("properties", {})
+    await query.edit_message_text(
+        _habits_text(props, date_label),
+        reply_markup=_habits_keyboard(props, page_id, from_week=True),
     )
 
 
@@ -939,6 +1055,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "─────────────────────\n"
         "⌨️ *Команди:*\n"
         "/today — звички на сьогодні (кнопки для відмітки)\n"
+        "/week — тижнева таблиця звичок, тисни на будь-який день\n"
         "/balance — доходи / витрати / баланс + рахунки за місяць\n"
         "/budget — ліміти по категоріях vs фактичні витрати\n"
         "/transactions — останні 10 транзакцій за місяць\n"
@@ -957,7 +1074,9 @@ def main() -> None:
     app.add_handler(CommandHandler("balance",      cmd_balance))
     app.add_handler(CommandHandler("budget",       cmd_budget))
     app.add_handler(CommandHandler("transactions", cmd_transactions))
-    app.add_handler(CallbackQueryHandler(habit_callback, pattern=r"^h_\d+_.+"))
+    app.add_handler(CommandHandler("week", cmd_week))
+    app.add_handler(CallbackQueryHandler(habit_callback, pattern=r"^h[w]?_\d+_.+"))
+    app.add_handler(CallbackQueryHandler(week_callback,  pattern=r"^week_"))
     app.add_handler(CallbackQueryHandler(tx_callback,    pattern=r"^tx_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
