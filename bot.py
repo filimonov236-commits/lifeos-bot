@@ -37,10 +37,11 @@ logger = logging.getLogger(__name__)
 # ─── Config ───────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 NOTION_TOKEN   = os.environ["NOTION_TOKEN"]
-MONO_TOKEN     = os.environ.get("MONO_TOKEN", "")
-PORT           = int(os.environ.get("PORT", 8000))
-RENDER_URL     = os.environ.get("RENDER_EXTERNAL_URL", "")
-CHAT_ID        = int(os.environ.get("CHAT_ID", 0))
+MONO_TOKEN      = os.environ.get("MONO_TOKEN", "")
+MONO_ACCOUNT    = os.environ.get("MONO_ACCOUNT", "")   # ID рахунку чорної картки
+PORT            = int(os.environ.get("PORT", 8000))
+RENDER_URL      = os.environ.get("RENDER_EXTERNAL_URL", "")
+CHAT_ID         = int(os.environ.get("CHAT_ID", 0))
 
 # chat_ids for Monobank notifications (populated at runtime + from env)
 _chat_ids: set[int] = {CHAT_ID} if CHAT_ID else set()
@@ -1283,6 +1284,11 @@ async def handle_mono_transaction(bot, data: dict) -> None:
             f"currency={item.get('currencyCode')}"
         )
 
+        account = (data.get("data") or {}).get("account", "")
+        if MONO_ACCOUNT and account != MONO_ACCOUNT:
+            logger.info(f"Mono tx: пропущено (рахунок {account!r} ≠ {MONO_ACCOUNT!r})")
+            return
+
         tx_id = item.get("id", "")
         if tx_id:
             if tx_id in _seen_mono_ids:
@@ -1304,10 +1310,6 @@ async def handle_mono_transaction(bot, data: dict) -> None:
         amount_uah  = abs(amount_kopecks) / 100
         tx_date     = date.fromtimestamp(time_unix).isoformat()
         is_expense  = amount_kopecks < 0
-
-        if not is_expense and mcc == 4829:
-            logger.info("Mono tx: пропущено дохід MCC 4829 (внутрішній переказ/банка)")
-            return
 
         if is_expense:
             cat     = MCC_TO_CATEGORY.get(mcc, "Інше")
