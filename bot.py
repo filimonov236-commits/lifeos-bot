@@ -130,6 +130,8 @@ EXPENSE_CAT_KEYWORDS: list[tuple[str, list[str]]] = [
                          "шопінг", "кросівки", "сукня", "одягу"]),
     ("Підписки",        ["підписка", "програм", "сервіс", "курс", "онлайн",
                          "software", "додаток", "app", "хостинг"]),
+    ("Перекази",        ["переказ", "переказав", "переказала", "перевів", "перевела",
+                         "надіслав", "надіслала", "відправив", "відправила", "переказати"]),
 ]
 
 # ─── Voice (optional) ─────────────────────────────────────────────────────────
@@ -300,17 +302,6 @@ def number_prop(val: float) -> dict:
     return {"number": val}
 
 
-def relation_prop(page_id: str) -> dict:
-    return {"relation": [{"id": page_id}]}
-
-
-def get_title(page: dict) -> str:
-    for p in page.get("properties", {}).values():
-        if p.get("type") == "title":
-            return "".join(b.get("plain_text", "") for b in p.get("title", []))
-    return "(без назви)"
-
-
 def notion_create(db_key: str, properties: dict) -> bool:
     resp = requests.post(
         f"{NOTION_API}/pages",
@@ -363,21 +354,31 @@ def notion_patch_page(page_id: str, properties: dict) -> dict | None:
 
 def notion_query(db_key: str, filter_obj: dict | None = None,
                  sorts: list | None = None) -> list:
-    body: dict = {"page_size": 100}
-    if filter_obj:
-        body["filter"] = filter_obj
-    if sorts:
-        body["sorts"] = sorts
-    resp = requests.post(
-        f"{NOTION_API}/databases/{DB[db_key]}/query",
-        headers=NOTION_HEADERS,
-        json=body,
-        timeout=10,
-    )
-    if resp.status_code != 200:
-        logger.error(f"Notion query error: {resp.text[:200]}")
-        return []
-    return resp.json().get("results", [])
+    results = []
+    cursor  = None
+    while True:
+        body: dict = {"page_size": 100}
+        if filter_obj:
+            body["filter"] = filter_obj
+        if sorts:
+            body["sorts"] = sorts
+        if cursor:
+            body["start_cursor"] = cursor
+        resp = requests.post(
+            f"{NOTION_API}/databases/{DB[db_key]}/query",
+            headers=NOTION_HEADERS,
+            json=body,
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            logger.error(f"Notion query error: {resp.text[:200]}")
+            return results
+        data = resp.json()
+        results.extend(data.get("results", []))
+        if not data.get("has_more"):
+            break
+        cursor = data.get("next_cursor")
+    return results
 
 
 # ─── Створення одного запису ──────────────────────────────────────────────────
