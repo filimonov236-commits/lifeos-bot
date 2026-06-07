@@ -1369,7 +1369,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "─────────────────────\n"
         "⌨️ *Команди:*\n"
         "/today — звички на сьогодні (кнопки для відмітки)\n"
-        "/вчора — звички за вчора (якщо забув відмітити)\n"
+        "/yesterday — звички за вчора (або напиши /вчора)\n"
         "/week — тижнева таблиця звичок, тисни на будь-який день\n"
         "/balance — доходи / витрати / баланс + рахунки за місяць\n"
         "/budget — ліміти по категоріях vs фактичні витрати\n"
@@ -1392,13 +1392,14 @@ def _setup_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("balance",      cmd_balance))
     app.add_handler(CommandHandler("budget",       cmd_budget))
     app.add_handler(CommandHandler("transactions", cmd_transactions))
-    app.add_handler(CommandHandler("menu",         cmd_menu))
-    app.add_handler(CommandHandler("week",         cmd_week))
-    app.add_handler(CommandHandler("вчора",        cmd_yesterday))
+    app.add_handler(CommandHandler("menu",      cmd_menu))
+    app.add_handler(CommandHandler("week",      cmd_week))
+    app.add_handler(CommandHandler("yesterday", cmd_yesterday))
     app.add_handler(CallbackQueryHandler(menu_callback,  pattern=r"^menu_"))
     app.add_handler(CallbackQueryHandler(habit_callback, pattern=r"^h[w]?_\d+_.+"))
     app.add_handler(CallbackQueryHandler(week_callback,  pattern=r"^week_"))
     app.add_handler(CallbackQueryHandler(tx_callback,    pattern=r"^tx_"))
+    app.add_handler(MessageHandler(filters.Regex(r"^/вчора"), cmd_yesterday))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
