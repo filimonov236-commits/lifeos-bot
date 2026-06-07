@@ -617,6 +617,36 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def cmd_yesterday(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    yesterday  = (date.today() - timedelta(days=1)).isoformat()
+    d          = date.fromisoformat(yesterday)
+    date_label = f"{d.day} {MONTHS_UK_GEN[d.month]}"
+
+    results = notion_query(
+        "задачі",
+        filter_obj={"property": "Date", "date": {"equals": yesterday}},
+    )
+
+    if results:
+        entry = results[0]
+    else:
+        entry = notion_create_page("задачі", {
+            "Name": title_prop(yesterday),
+            "Date": date_prop(yesterday),
+        })
+        if not entry:
+            await update.message.reply_text("❌ Не вдалося створити запис на вчора.")
+            return
+
+    page_id = entry["id"]
+    props   = entry.get("properties", {})
+
+    await update.message.reply_text(
+        _habits_text(props, date_label),
+        reply_markup=_habits_keyboard(props, page_id),
+    )
+
+
 async def habit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -1055,6 +1085,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "─────────────────────\n"
         "⌨️ *Команди:*\n"
         "/today — звички на сьогодні (кнопки для відмітки)\n"
+        "/вчора — звички за вчора (якщо забув відмітити)\n"
         "/week — тижнева таблиця звичок, тисни на будь-який день\n"
         "/balance — доходи / витрати / баланс + рахунки за місяць\n"
         "/budget — ліміти по категоріях vs фактичні витрати\n"
@@ -1074,7 +1105,8 @@ def main() -> None:
     app.add_handler(CommandHandler("balance",      cmd_balance))
     app.add_handler(CommandHandler("budget",       cmd_budget))
     app.add_handler(CommandHandler("transactions", cmd_transactions))
-    app.add_handler(CommandHandler("week", cmd_week))
+    app.add_handler(CommandHandler("week",   cmd_week))
+    app.add_handler(CommandHandler("вчора",  cmd_yesterday))
     app.add_handler(CallbackQueryHandler(habit_callback, pattern=r"^h[w]?_\d+_.+"))
     app.add_handler(CallbackQueryHandler(week_callback,  pattern=r"^week_"))
     app.add_handler(CallbackQueryHandler(tx_callback,    pattern=r"^tx_"))
