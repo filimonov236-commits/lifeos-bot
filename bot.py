@@ -476,7 +476,46 @@ async def process_text(update: Update, text: str,
 
 # ─── Handlers ─────────────────────────────────────────────────────────────────
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await process_text(update, update.message.text.strip(), context)
+    text     = update.message.text.strip()
+    awaiting = context.user_data.pop("awaiting", None)
+
+    if awaiting == "витрата":
+        amount   = parse_amount(text)
+        date_iso = parse_date_from_text(text)
+        auto_cat = detect_expense_category(text)
+        context.user_data["pending_tx"] = {"text": text, "amount": amount, "date_iso": date_iso}
+        amt = f"  —  {amount:,.0f} грн" if amount else ""
+        await update.message.reply_text(
+            f"💸 Витрата{amt}\nОберіть категорію:",
+            reply_markup=_category_keyboard(auto_cat),
+        )
+        return
+
+    if awaiting == "дохід":
+        amount = parse_amount(text)
+        props  = {
+            "Деталі":   title_prop(text),
+            "Дата":     date_prop(parse_date_from_text(text) or today_iso()),
+            "Примітка": {"rich_text": [{"text": {"content": "дохід|"}}]},
+        }
+        if amount:
+            props["Сума"] = number_prop(amount)
+        ok      = notion_create("транзакції", props)
+        amt_str = f" — {amount:,.0f} грн" if amount else ""
+        await update.message.reply_text(
+            f"✅ Дохід записано{amt_str}" if ok else "❌ Помилка запису в Notion"
+        )
+        return
+
+    if awaiting == "ідеї":
+        props = {"Назва": title_prop(text), "Статус": select_prop("🆕 Нова")}
+        ok    = notion_create("ідеї", props)
+        await update.message.reply_text(
+            f"✅ Ідея записана: «{text[:60]}»" if ok else "❌ Помилка запису в Notion"
+        )
+        return
+
+    await process_text(update, text, context)
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -946,17 +985,16 @@ async def tx_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
 
 
-async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+# ─── Data builders (used by both commands and menu callback) ──────────────────
+def _build_balance() -> str:
     now = datetime.now()
     start, end = _month_range()
-
     rows = notion_query("транзакції", filter_obj={
         "and": [
             {"property": "Дата", "date": {"on_or_after": start}},
             {"property": "Дата", "date": {"before":      end}},
         ]
     })
-
     income = expense = 0.0
     for r in rows:
         props = r.get("properties", {})
@@ -966,12 +1004,10 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             income += сума
         elif тип == "витрата":
             expense += сума
-
     balance = income - expense
     sign  = "+" if balance >= 0 else ""
     emoji = "💪" if balance >= 0 else "😬"
-
-    await update.message.reply_text(
+    return (
         f"💰 Баланс за {MONTHS_UK[now.month]} {now.year}:\n\n"
         f"💚 Доходи:  {income:>10,.0f} грн\n"
         f"🔴 Витрати: {expense:>10,.0f} грн\n"
@@ -980,18 +1016,15 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
-async def cmd_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def _build_budget() -> str:
     now = datetime.now()
     start, end = _month_range()
-
-    # Sum expenses per category from Примітка
     rows = notion_query("транзакції", filter_obj={
         "and": [
             {"property": "Дата", "date": {"on_or_after": start}},
             {"property": "Дата", "date": {"before":      end}},
         ]
     })
-
     cat_spent: dict[str, float] = {}
     for r in rows:
         props = r.get("properties", {})
@@ -1000,42 +1033,37 @@ async def cmd_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if тип == "витрата" and кат:
             cat_spent[кат] = cat_spent.get(кат, 0.0) + сума
 
-    # Budget limits from Місячний бюджет
     budget_rows = notion_query("місячний_бюджет")
     if not budget_rows:
-        await update.message.reply_text("📊 Місячний бюджет порожній.")
-        return
+        return "📊 Місячний бюджет порожній."
 
     lines        = [f"📊 Бюджет за {MONTHS_UK[now.month]} {now.year}:\n"]
     total_budget = total_actual = 0.0
-
     for item in budget_rows:
         props  = item.get("properties", {})
         cat    = "".join(b.get("plain_text", "") for b in props.get("Name", {}).get("title", []))
         limit  = props.get("Amount", {}).get("number") or 0.0
         actual = cat_spent.get(cat, 0.0)
-
-        diff     = limit - actual
-        diff_str = f"+{diff:,.0f}" if diff >= 0 else f"{diff:,.0f}"
-        status   = "🟢" if diff >= 0 else "🔴"
-
-        lines.append(f"{status} {cat}: {actual:,.0f} / {limit:,.0f} грн  ({diff_str})")
+        diff   = limit - actual
+        lines.append(
+            f"{'🟢' if diff >= 0 else '🔴'} {cat}: "
+            f"{actual:,.0f} / {limit:,.0f} грн  "
+            f"({'+'if diff>=0 else ''}{diff:,.0f})"
+        )
         total_budget += limit
         total_actual += actual
-
     total_diff = total_budget - total_actual
-    diff_str   = f"+{total_diff:,.0f}" if total_diff >= 0 else f"{total_diff:,.0f}"
     lines.append(f"\n{'─' * 30}")
-    lines.append(f"Всього витрат: {total_actual:,.0f} / {total_budget:,.0f} грн  ({diff_str})")
+    lines.append(
+        f"Всього витрат: {total_actual:,.0f} / {total_budget:,.0f} грн  "
+        f"({'+'if total_diff>=0 else''}{total_diff:,.0f})"
+    )
+    return "\n".join(lines)
 
-    await update.message.reply_text("\n".join(lines))
 
-
-async def cmd_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show last 10 transactions of the current month."""
-    start, end = _month_range()
+def _build_transactions() -> str:
     now = datetime.now()
-
+    start, end = _month_range()
     rows = notion_query("транзакції", filter_obj={
         "and": [
             {"property": "Дата", "date": {"on_or_after": start}},
@@ -1044,8 +1072,7 @@ async def cmd_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     }, sorts=[{"property": "Дата", "direction": "descending"}])
 
     if not rows:
-        await update.message.reply_text(f"📭 Транзакцій за {MONTHS_UK[now.month]} поки немає.")
-        return
+        return f"📭 Транзакцій за {MONTHS_UK[now.month]} поки немає."
 
     lines = [f"📋 Транзакції за {MONTHS_UK[now.month]} {now.year}:\n"]
     for r in rows[:10]:
@@ -1056,10 +1083,111 @@ async def cmd_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         тип, кат = _parse_tx_note(props)
         icon   = "💚" if тип == "дохід" else "🔴"
         day    = дата[8:10] if len(дата) >= 10 else "?"
-        cat_suffix = f" [{кат}]" if кат else ""
-        lines.append(f"{icon} {day} — {деталі}: {сума:,.0f} грн{cat_suffix}")
+        suffix = f" [{кат}]" if кат else ""
+        lines.append(f"{icon} {day} — {деталі}: {сума:,.0f} грн{suffix}")
+    return "\n".join(lines)
 
-    await update.message.reply_text("\n".join(lines))
+
+# ─── Commands (thin wrappers around builders) ─────────────────────────────────
+async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(_build_balance())
+
+
+async def cmd_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(_build_budget())
+
+
+async def cmd_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(_build_transactions())
+
+
+# ─── Menu ─────────────────────────────────────────────────────────────────────
+def _menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📅 Сьогодні",   callback_data="menu_today"),
+            InlineKeyboardButton("🗓 Тиждень",    callback_data="menu_week"),
+        ],
+        [
+            InlineKeyboardButton("💸 Витрата",    callback_data="menu_витрата"),
+            InlineKeyboardButton("💚 Дохід",      callback_data="menu_дохід"),
+        ],
+        [
+            InlineKeyboardButton("💰 Баланс",     callback_data="menu_balance"),
+            InlineKeyboardButton("📊 Бюджет",     callback_data="menu_budget"),
+        ],
+        [
+            InlineKeyboardButton("🧾 Транзакції", callback_data="menu_transactions"),
+            InlineKeyboardButton("💡 Ідея",       callback_data="menu_ідея"),
+        ],
+    ])
+
+
+async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("🗂 Головне меню:", reply_markup=_menu_keyboard())
+
+
+async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query  = update.callback_query
+    await query.answer()
+    action = query.data[5:]  # strip "menu_"
+
+    # ── View actions — edit menu in place ────────────────────────────────────
+    if action == "today":
+        iso = today_iso()
+        d   = date.fromisoformat(iso)
+        results = notion_query("задачі", filter_obj={"property": "Date", "date": {"equals": iso}})
+        entry   = results[0] if results else notion_create_page(
+            "задачі", {"Name": title_prop(iso), "Date": date_prop(iso)}
+        )
+        if not entry:
+            await query.answer("❌ Помилка Notion", show_alert=True)
+            return
+        props = entry.get("properties", {})
+        label = f"{d.day} {MONTHS_UK_GEN[d.month]}"
+        await query.edit_message_text(
+            _habits_text(props, label),
+            reply_markup=_habits_keyboard(props, entry["id"]),
+        )
+        return
+
+    if action == "week":
+        text, keyboard = _get_week_data()
+        await query.edit_message_text(text, reply_markup=keyboard)
+        return
+
+    if action == "balance":
+        await query.edit_message_text(_build_balance())
+        return
+
+    if action == "budget":
+        await query.edit_message_text(_build_budget())
+        return
+
+    if action == "transactions":
+        await query.edit_message_text(_build_transactions())
+        return
+
+    # ── Input actions — prompt + set awaiting ────────────────────────────────
+    if action == "витрата":
+        context.user_data["awaiting"] = "витрата"
+        await query.edit_message_text(
+            "💸 Напиши суму і опис витрати:\n"
+            "Наприклад: «кава 80» або «150 таксі»"
+        )
+        return
+
+    if action == "дохід":
+        context.user_data["awaiting"] = "дохід"
+        await query.edit_message_text(
+            "💚 Напиши суму і опис доходу:\n"
+            "Наприклад: «зарплата 35000»"
+        )
+        return
+
+    if action == "ідея":
+        context.user_data["awaiting"] = "ідеї"
+        await query.edit_message_text("💡 Напиши свою ідею:")
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1090,6 +1218,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/balance — доходи / витрати / баланс + рахунки за місяць\n"
         "/budget — ліміти по категоріях vs фактичні витрати\n"
         "/transactions — останні 10 транзакцій за місяць\n"
+        "/menu — головне меню (всі функції в одному місці)\n"
         "/help — ця довідка",
         parse_mode="Markdown",
     )
@@ -1105,8 +1234,10 @@ def main() -> None:
     app.add_handler(CommandHandler("balance",      cmd_balance))
     app.add_handler(CommandHandler("budget",       cmd_budget))
     app.add_handler(CommandHandler("transactions", cmd_transactions))
+    app.add_handler(CommandHandler("menu",   cmd_menu))
     app.add_handler(CommandHandler("week",   cmd_week))
     app.add_handler(CommandHandler("вчора",  cmd_yesterday))
+    app.add_handler(CallbackQueryHandler(menu_callback,  pattern=r"^menu_"))
     app.add_handler(CallbackQueryHandler(habit_callback, pattern=r"^h[w]?_\d+_.+"))
     app.add_handler(CallbackQueryHandler(week_callback,  pattern=r"^week_"))
     app.add_handler(CallbackQueryHandler(tx_callback,    pattern=r"^tx_"))
