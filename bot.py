@@ -1264,69 +1264,74 @@ def _register_mono_webhook() -> None:
 
 
 async def handle_mono_transaction(bot, data: dict) -> None:
-    item = (data.get("data") or {}).get("statementItem") or {}
-    if not item:
-        logger.warning("Mono webhook: порожній statementItem")
-        return
-    logger.info(
-        f"Mono tx: amount={item.get('amount')} hold={item.get('hold')} "
-        f"mcc={item.get('mcc')} desc={item.get('description')!r} "
-        f"currency={item.get('currencyCode')}"
-    )
-    if item.get("currencyCode", 980) != 980:
-        logger.info("Mono tx: пропущено (не гривня)")
-        return                              # тільки гривня
-
-    amount_kopecks = item.get("amount", 0)
-    if amount_kopecks == 0:
-        logger.info("Mono tx: пропущено (сума 0)")
-        return
-
-    description = (item.get("description") or "").strip() or "Monobank"
-    mcc         = item.get("mcc", 0)
-    time_unix   = item.get("time", 0)
-    amount_uah  = abs(amount_kopecks) / 100
-    tx_date     = date.fromtimestamp(time_unix).isoformat()
-    is_expense  = amount_kopecks < 0
-
-    if is_expense:
-        cat     = MCC_TO_CATEGORY.get(mcc, "Інше")
-        warning = _budget_status(cat, amount_uah)
-        props   = {
-            "Деталі":   title_prop(description),
-            "Дата":     date_prop(tx_date),
-            "Сума":     number_prop(amount_uah),
-            "Примітка": {"rich_text": [{"text": {"content": f"витрата|{cat}"}}]},
-        }
-        ok   = notion_create("транзакції", props)
-        icon = EXPENSE_CAT_ICONS.get(cat, "📦")
-        msg  = (
-            f"💳 Monobank\n"
-            f"💸 {description} — {amount_uah:,.0f} грн\n"
-            f"{icon} {cat}{warning}"
+    try:
+        item = (data.get("data") or {}).get("statementItem") or {}
+        if not item:
+            logger.warning("Mono webhook: порожній statementItem")
+            return
+        logger.info(
+            f"Mono tx: amount={item.get('amount')} hold={item.get('hold')} "
+            f"mcc={item.get('mcc')} desc={item.get('description')!r} "
+            f"currency={item.get('currencyCode')}"
         )
-    else:
-        props = {
-            "Деталі":   title_prop(description),
-            "Дата":     date_prop(tx_date),
-            "Сума":     number_prop(amount_uah),
-            "Примітка": {"rich_text": [{"text": {"content": "дохід|"}}]},
-        }
-        ok  = notion_create("транзакції", props)
-        msg = f"💳 Monobank\n💚 {description} — {amount_uah:,.0f} грн"
+        if item.get("currencyCode", 980) != 980:
+            logger.info("Mono tx: пропущено (не гривня)")
+            return
 
-    prefix   = "✅" if ok else "❌ Notion: помилка запису\n"
-    full_msg = f"{prefix} {msg}" if ok else f"{prefix}{msg}"
+        amount_kopecks = item.get("amount", 0)
+        if amount_kopecks == 0:
+            logger.info("Mono tx: пропущено (сума 0)")
+            return
 
-    targets = list(_chat_ids)
-    if not targets:
-        logger.warning("Mono tx received but no chat_ids — set CHAT_ID env var")
-        return
-    for chat_id in targets:
-        try:
-            await bot.send_message(chat_id=chat_id, text=full_msg)
-        except Exception as e:
-            logger.error(f"Mono notify {chat_id}: {e}")
+        description = (item.get("description") or "").strip() or "Monobank"
+        mcc         = item.get("mcc", 0)
+        time_unix   = item.get("time", 0)
+        amount_uah  = abs(amount_kopecks) / 100
+        tx_date     = date.fromtimestamp(time_unix).isoformat()
+        is_expense  = amount_kopecks < 0
+
+        if is_expense:
+            cat     = MCC_TO_CATEGORY.get(mcc, "Інше")
+            warning = _budget_status(cat, amount_uah)
+            props   = {
+                "Деталі":   title_prop(description),
+                "Дата":     date_prop(tx_date),
+                "Сума":     number_prop(amount_uah),
+                "Примітка": {"rich_text": [{"text": {"content": f"витрата|{cat}"}}]},
+            }
+            ok   = notion_create("транзакції", props)
+            icon = EXPENSE_CAT_ICONS.get(cat, "📦")
+            msg  = (
+                f"💳 Monobank\n"
+                f"💸 {description} — {amount_uah:,.0f} грн\n"
+                f"{icon} {cat}{warning}"
+            )
+        else:
+            props = {
+                "Деталі":   title_prop(description),
+                "Дата":     date_prop(tx_date),
+                "Сума":     number_prop(amount_uah),
+                "Примітка": {"rich_text": [{"text": {"content": "дохід|"}}]},
+            }
+            ok  = notion_create("транзакції", props)
+            msg = f"💳 Monobank\n💚 {description} — {amount_uah:,.0f} грн"
+
+        logger.info(f"Mono tx: notion_create={'ok' if ok else 'FAIL'}, targets={list(_chat_ids)}")
+        prefix   = "✅" if ok else "❌ Notion: помилка запису\n"
+        full_msg = f"{prefix} {msg}" if ok else f"{prefix}{msg}"
+
+        targets = list(_chat_ids)
+        if not targets:
+            logger.warning("Mono tx received but no chat_ids — set CHAT_ID env var")
+            return
+        for chat_id in targets:
+            try:
+                await bot.send_message(chat_id=chat_id, text=full_msg)
+                logger.info(f"Mono tx: повідомлення надіслано → {chat_id}")
+            except Exception as e:
+                logger.error(f"Mono notify {chat_id}: {e}")
+    except Exception as e:
+        logger.error(f"handle_mono_transaction crash: {e}", exc_info=True)
 
 
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
