@@ -61,28 +61,11 @@ DB = {
     "аналіз":           "f39c228f-5e9f-829f-81ee-81b3c0bf9a9c",
 }
 
-# IDs типу транзакції: Дохід / Витрата
-INCOME_TYPE_ID  = "d18c228f-5e9f-82a5-9647-81794899cfce"
-EXPENSE_TYPE_ID = "de1c228f-5e9f-82f4-b6e4-019eb100cfc1"
-
-# IDs рахунків
-ACCOUNT_IDS: dict[str, str] = {
-    "Готівка":    "f00c228f-5e9f-828e-975e-8128ec963fd4",
-    "ПриватБанк": "53fc228f-5e9f-8324-be11-81d10249b8ec",
-    "Monobank":   "63ac228f-5e9f-83b0-b5df-81e4a34baec7",
-}
-
-# Прив'язка назви категорії → page_id в Місячний бюджет
-BUDGET_CAT_IDS: dict[str, str] = {
-    "Їжа та кафе":     "623c228f-5e9f-8263-bb78-811858e16b2d",
-    "Транспорт":       "23bc228f-5e9f-82eb-9bbe-013c3852b35d",
-    "Комунальні":      "275c228f-5e9f-82cb-8fb0-019c7f868706",
-    "Розваги та спорт":"815c228f-5e9f-82d2-9e51-017184c0b53f",
-    "Одяг":            "79dc228f-5e9f-8378-b7ff-01a6f3522b3e",
-    "Підписки":        "2e6c228f-5e9f-828b-895c-81db3ac89365",
-    "Зарплата":        "20ec228f-5e9f-83f3-bc94-810e7d64e19a",
-    "Інше":            "7bfc228f-5e9f-8323-b477-01ce25868ae8",
-}
+# Категорії витрат (ім'я → ім'я, без Notion page IDs — relations не пишуться через API)
+BUDGET_CATEGORIES = [
+    "Їжа та кафе", "Транспорт", "Комунальні", "Розваги та спорт",
+    "Одяг", "Підписки", "Зарплата", "Інше",
+]
 
 # Ключові слова для визначення категорії витрати
 EXPENSE_CAT_KEYWORDS: list[tuple[str, list[str]]] = [
@@ -360,12 +343,10 @@ def create_single_record(text: str, category: str, date_iso: str | None) -> tupl
 
     if category == "витрата":
         exp_cat = detect_expense_category(text)
-        cat_id  = BUDGET_CAT_IDS.get(exp_cat, BUDGET_CAT_IDS["Інше"])
         props = {
-            "Деталі":    title_prop(text),
-            "Дата":      date_prop(date_iso or today_iso()),
-            "Тип":       relation_prop(EXPENSE_TYPE_ID),
-            "Категорія": relation_prop(cat_id),
+            "Деталі":  title_prop(text),
+            "Дата":    date_prop(date_iso or today_iso()),
+            "Примітка": {"rich_text": [{"text": {"content": f"витрата|{exp_cat}"}}]},
         }
         if amount:
             props["Сума"] = number_prop(amount)
@@ -374,9 +355,9 @@ def create_single_record(text: str, category: str, date_iso: str | None) -> tupl
 
     if category == "дохід":
         props = {
-            "Деталі": title_prop(text),
-            "Дата":   date_prop(date_iso or today_iso()),
-            "Тип":    relation_prop(INCOME_TYPE_ID),
+            "Деталі":  title_prop(text),
+            "Дата":    date_prop(date_iso or today_iso()),
+            "Примітка": {"rich_text": [{"text": {"content": "дохід|"}}]},
         }
         if amount:
             props["Сума"] = number_prop(amount)
@@ -633,6 +614,15 @@ def _month_range() -> tuple[str, str]:
     return start, end
 
 
+def _parse_tx_note(props: dict) -> tuple[str, str]:
+    """Parse Примітка 'тип|категорія' → (тип, категорія)."""
+    note = "".join(t.get("plain_text", "") for t in props.get("Примітка", {}).get("rich_text", []))
+    parts = note.split("|", 1)
+    тип  = parts[0].strip() if parts else ""
+    кат  = parts[1].strip() if len(parts) > 1 else ""
+    return тип, кат
+
+
 async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     now = datetime.now()
     start, end = _month_range()
@@ -648,58 +638,44 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     for r in rows:
         props = r.get("properties", {})
         сума  = props.get("Сума", {}).get("number") or 0
-        тип   = [rel["id"] for rel in props.get("Тип", {}).get("relation", [])]
-        if INCOME_TYPE_ID in тип:
+        тип, _ = _parse_tx_note(props)
+        if тип == "дохід":
             income += сума
-        elif EXPENSE_TYPE_ID in тип:
+        elif тип == "витрата":
             expense += сума
 
     balance = income - expense
     sign  = "+" if balance >= 0 else ""
     emoji = "💪" if balance >= 0 else "😬"
 
-    # Account balances from Рахунки
-    account_rows = notion_query("рахунки")
-    acc_lines = []
-    for a in account_rows:
-        props = a.get("properties", {})
-        name = "".join(t.get("plain_text", "") for t in props.get("Назва рахунку", {}).get("title", []))
-        bal  = (props.get("Balance", {}).get("formula") or {}).get("number") or 0
-        acc_lines.append(f"  {name}: {bal:,.0f} грн")
-
-    text = (
+    await update.message.reply_text(
         f"💰 Баланс за {MONTHS_UK[now.month]} {now.year}:\n\n"
         f"💚 Доходи:  {income:>10,.0f} грн\n"
         f"🔴 Витрати: {expense:>10,.0f} грн\n"
         f"{'─' * 26}\n"
         f"{emoji} Баланс:  {sign}{balance:>9,.0f} грн"
     )
-    if acc_lines:
-        text += "\n\n🏦 Рахунки:\n" + "\n".join(acc_lines)
-
-    await update.message.reply_text(text)
 
 
 async def cmd_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     now = datetime.now()
     start, end = _month_range()
 
-    # Calculate actual spending per category directly from Транзакції
-    expense_rows = notion_query("транзакції", filter_obj={
+    # Sum expenses per category from Примітка
+    rows = notion_query("транзакції", filter_obj={
         "and": [
-            {"property": "Дата",  "date":     {"on_or_after": start}},
-            {"property": "Дата",  "date":     {"before":      end}},
-            {"property": "Тип",   "relation": {"contains":    EXPENSE_TYPE_ID}},
+            {"property": "Дата", "date": {"on_or_after": start}},
+            {"property": "Дата", "date": {"before":      end}},
         ]
     })
 
     cat_spent: dict[str, float] = {}
-    for r in expense_rows:
+    for r in rows:
         props = r.get("properties", {})
         сума  = props.get("Сума", {}).get("number") or 0
-        for rel in props.get("Категорія", {}).get("relation", []):
-            cid = rel["id"]
-            cat_spent[cid] = cat_spent.get(cid, 0.0) + сума
+        тип, кат = _parse_tx_note(props)
+        if тип == "витрата" and кат:
+            cat_spent[кат] = cat_spent.get(кат, 0.0) + сума
 
     # Budget limits from Місячний бюджет
     budget_rows = notion_query("місячний_бюджет")
@@ -714,7 +690,7 @@ async def cmd_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         props  = item.get("properties", {})
         cat    = "".join(b.get("plain_text", "") for b in props.get("Name", {}).get("title", []))
         limit  = props.get("Amount", {}).get("number") or 0.0
-        actual = cat_spent.get(item["id"], 0.0)
+        actual = cat_spent.get(cat, 0.0)
 
         diff     = limit - actual
         diff_str = f"+{diff:,.0f}" if diff >= 0 else f"{diff:,.0f}"
@@ -750,14 +726,15 @@ async def cmd_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     lines = [f"📋 Транзакції за {MONTHS_UK[now.month]} {now.year}:\n"]
     for r in rows[:10]:
-        props = r.get("properties", {})
+        props  = r.get("properties", {})
         деталі = "".join(t.get("plain_text", "") for t in props.get("Деталі", {}).get("title", []))
-        сума   = props.get("Сума",  {}).get("number") or 0
+        сума   = props.get("Сума", {}).get("number") or 0
         дата   = (props.get("Дата", {}).get("date") or {}).get("start", "")
-        тип    = [rel["id"] for rel in props.get("Тип", {}).get("relation", [])]
-        icon   = "💚" if INCOME_TYPE_ID in тип else "🔴"
+        тип, кат = _parse_tx_note(props)
+        icon   = "💚" if тип == "дохід" else "🔴"
         day    = дата[8:10] if len(дата) >= 10 else "?"
-        lines.append(f"{icon} {day} — {деталі}: {сума:,.0f} грн")
+        cat_suffix = f" [{кат}]" if кат else ""
+        lines.append(f"{icon} {day} — {деталі}: {сума:,.0f} грн{cat_suffix}")
 
     await update.message.reply_text("\n".join(lines))
 
