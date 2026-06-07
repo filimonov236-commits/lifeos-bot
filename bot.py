@@ -433,9 +433,8 @@ async def process_text(update: Update, text: str,
             amt = f"  —  {amount:,.0f} грн"
             short = part[:50] + ("…" if len(part) > 50 else "")
             await update.message.reply_text(
-                f"❓ *«{short}»*  {amt}\nЩо це?",
+                f"❓ «{short}»  {amt}\nЩо це?",
                 reply_markup=_type_keyboard(),
-                parse_mode="Markdown",
             )
             return
 
@@ -701,13 +700,13 @@ async def habit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     page = notion_get_page(page_id)
     if not page:
-        await query.answer("❌ Помилка читання", show_alert=True)
+        await query.edit_message_text("❌ Не вдалося прочитати сторінку Notion.")
         return
 
     current = page.get("properties", {}).get(habit, {}).get("checkbox", False)
     updated = notion_patch_page(page_id, {habit: {"checkbox": not current}})
     if not updated:
-        await query.answer("❌ Помилка оновлення", show_alert=True)
+        await query.edit_message_text("❌ Не вдалося оновити Notion.")
         return
 
     updated_props = updated.get("properties", {})
@@ -1076,16 +1075,24 @@ def _build_transactions() -> str:
         return f"📭 Транзакцій за {MONTHS_UK[now.month]} поки немає."
 
     lines = [f"📋 Транзакції за {MONTHS_UK[now.month]} {now.year}:\n"]
-    for r in rows[:10]:
+    shown = 0
+    for r in rows:
+        if shown >= 10:
+            break
         props  = r.get("properties", {})
         деталі = "".join(t.get("plain_text", "") for t in props.get("Деталі", {}).get("title", []))
         сума   = props.get("Сума", {}).get("number") or 0
         дата   = (props.get("Дата", {}).get("date") or {}).get("start", "")
         тип, кат = _parse_tx_note(props)
+        if not тип and not деталі and not сума:
+            continue  # пропускаємо порожні записи
         icon   = "💚" if тип == "дохід" else "🔴"
         day    = дата[8:10] if len(дата) >= 10 else "?"
         suffix = f" [{кат}]" if кат else ""
         lines.append(f"{icon} {day} — {деталі}: {сума:,.0f} грн{suffix}")
+        shown += 1
+    if shown == 0:
+        return f"📭 Транзакцій за {MONTHS_UK[now.month]} поки немає."
     return "\n".join(lines)
 
 
@@ -1103,6 +1110,12 @@ async def cmd_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 # ─── Menu ─────────────────────────────────────────────────────────────────────
+def _back_to_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("◀️ Меню", callback_data="menu_back"),
+    ]])
+
+
 def _menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
@@ -1133,6 +1146,11 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await query.answer()
     action = query.data[5:]  # strip "menu_"
 
+    # ── Back to menu ─────────────────────────────────────────────────────────
+    if action == "back":
+        await query.edit_message_text("🗂 Головне меню:", reply_markup=_menu_keyboard())
+        return
+
     # ── View actions — edit menu in place ────────────────────────────────────
     if action == "today":
         iso = today_iso()
@@ -1142,7 +1160,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "задачі", {"Name": title_prop(iso), "Date": date_prop(iso)}
         )
         if not entry:
-            await query.answer("❌ Помилка Notion", show_alert=True)
+            await query.edit_message_text("❌ Не вдалося створити запис Notion.")
             return
         props = entry.get("properties", {})
         label = f"{d.day} {MONTHS_UK_GEN[d.month]}"
@@ -1158,15 +1176,15 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     if action == "balance":
-        await query.edit_message_text(_build_balance())
+        await query.edit_message_text(_build_balance(), reply_markup=_back_to_menu_keyboard())
         return
 
     if action == "budget":
-        await query.edit_message_text(_build_budget())
+        await query.edit_message_text(_build_budget(), reply_markup=_back_to_menu_keyboard())
         return
 
     if action == "transactions":
-        await query.edit_message_text(_build_transactions())
+        await query.edit_message_text(_build_transactions(), reply_markup=_back_to_menu_keyboard())
         return
 
     # ── Input actions — prompt + set awaiting ────────────────────────────────
