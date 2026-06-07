@@ -45,6 +45,9 @@ CHAT_ID        = int(os.environ.get("CHAT_ID", 0))
 # chat_ids for Monobank notifications (populated at runtime + from env)
 _chat_ids: set[int] = {CHAT_ID} if CHAT_ID else set()
 
+# Deduplicates Monobank events: Mono sends hold=True then hold=False for the same tx
+_seen_mono_ids: set[str] = set()
+
 NOTION_HEADERS = {
     "Authorization":  f"Bearer {NOTION_TOKEN}",
     "Content-Type":   "application/json",
@@ -1274,10 +1277,17 @@ async def handle_mono_transaction(bot, data: dict) -> None:
             logger.warning("Mono webhook: порожній statementItem")
             return
         logger.info(
-            f"Mono tx: amount={item.get('amount')} hold={item.get('hold')} "
+            f"Mono tx: id={item.get('id')!r} amount={item.get('amount')} hold={item.get('hold')} "
             f"mcc={item.get('mcc')} desc={item.get('description')!r} "
             f"currency={item.get('currencyCode')}"
         )
+
+        tx_id = item.get("id", "")
+        if tx_id:
+            if tx_id in _seen_mono_ids:
+                logger.info(f"Mono tx: пропущено дублікат (id={tx_id!r})")
+                return
+            _seen_mono_ids.add(tx_id)
         if item.get("currencyCode", 980) != 980:
             logger.info("Mono tx: пропущено (не гривня)")
             return
