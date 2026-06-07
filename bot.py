@@ -1305,6 +1305,10 @@ async def handle_mono_transaction(bot, data: dict) -> None:
         tx_date     = date.fromtimestamp(time_unix).isoformat()
         is_expense  = amount_kopecks < 0
 
+        if not is_expense and mcc == 4829:
+            logger.info("Mono tx: пропущено дохід MCC 4829 (внутрішній переказ/банка)")
+            return
+
         if is_expense:
             cat     = MCC_TO_CATEGORY.get(mcc, "Інше")
             warning = _budget_status(cat, amount_uah)
