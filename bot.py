@@ -962,12 +962,14 @@ async def tx_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await query.edit_message_text("⏱ Сесія закінчилась. Надішли повідомлення ще раз.")
             return
 
+        amount  = pending.get("amount")
+        warning = _budget_status(cat, amount or 0)   # перед збереженням — щоб не подвоювати
+
         props = {
             "Деталі":   title_prop(pending["text"]),
             "Дата":     date_prop(pending.get("date_iso") or today_iso()),
             "Примітка": {"rich_text": [{"text": {"content": f"витрата|{cat}"}}]},
         }
-        amount = pending.get("amount")
         if amount:
             props["Сума"] = number_prop(amount)
         ok = notion_create("транзакції", props)
@@ -979,7 +981,6 @@ async def tx_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         icon    = EXPENSE_CAT_ICONS.get(cat, "📦")
         amt_str = f" — {amount:,.0f} грн" if amount else ""
-        warning = _budget_status(cat, amount or 0)
         await query.edit_message_text(
             f"✅ Витрата [{icon} {cat}]{amt_str}{warning}"
         )
