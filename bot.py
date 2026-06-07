@@ -1437,12 +1437,12 @@ async def _webhook_main() -> None:
         tg_url = f"{RENDER_URL}/{TELEGRAM_TOKEN}"
         await ptb_app.bot.set_webhook(tg_url)
         logger.info(f"🌐 TG webhook → {tg_url}")
-        _register_mono_webhook()
         await ptb_app.start()
         runner = web.AppRunner(aio)
         await runner.setup()
         await web.TCPSite(runner, "0.0.0.0", PORT).start()
         logger.info(f"✅ Server on :{PORT}")
+        _register_mono_webhook()
         await asyncio.Event().wait()
 
 
