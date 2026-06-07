@@ -1,5 +1,6 @@
 python-telegram-bot[webhooks]==22.5
 requests==2.32.3
+aiohttp==3.11.18
 SpeechRecognition==3.11.0
 pydub==0.25.1
 python-dotenv==1.0.1

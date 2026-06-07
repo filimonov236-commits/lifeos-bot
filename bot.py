@@ -7,11 +7,13 @@ Notion Life OS — Telegram Bot
 
 import os
 import re
+import asyncio
 import logging
 import tempfile
 from datetime import datetime, date, timedelta
 
 import requests
+from aiohttp import web
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -35,8 +37,13 @@ logger = logging.getLogger(__name__)
 # ─── Config ───────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 NOTION_TOKEN   = os.environ["NOTION_TOKEN"]
+MONO_TOKEN     = os.environ.get("MONO_TOKEN", "")
 PORT           = int(os.environ.get("PORT", 8000))
 RENDER_URL     = os.environ.get("RENDER_EXTERNAL_URL", "")
+CHAT_ID        = int(os.environ.get("CHAT_ID", 0))
+
+# chat_ids for Monobank notifications (populated at runtime + from env)
+_chat_ids: set[int] = {CHAT_ID} if CHAT_ID else set()
 
 NOTION_HEADERS = {
     "Authorization":  f"Bearer {NOTION_TOKEN}",
@@ -72,6 +79,35 @@ EXPENSE_CATEGORIES: list[tuple[str, str]] = [
     ("Інше",             "📦"),
 ]
 EXPENSE_CAT_ICONS = dict(EXPENSE_CATEGORIES)
+
+# MCC-коди → категорія витрат (Monobank надає MCC для кожної транзакції)
+MCC_TO_CATEGORY: dict[int, str] = {
+    # Їжа та кафе
+    5411: "Їжа та кафе", 5412: "Їжа та кафе", 5422: "Їжа та кафе",
+    5441: "Їжа та кафе", 5451: "Їжа та кафе", 5462: "Їжа та кафе",
+    5499: "Їжа та кафе", 5811: "Їжа та кафе", 5812: "Їжа та кафе",
+    5813: "Їжа та кафе", 5814: "Їжа та кафе", 5921: "Їжа та кафе",
+    # Транспорт
+    4111: "Транспорт", 4112: "Транспорт", 4121: "Транспорт",
+    4131: "Транспорт", 4411: "Транспорт", 4511: "Транспорт",
+    4784: "Транспорт", 5541: "Транспорт", 5542: "Транспорт",
+    7512: "Транспорт", 7513: "Транспорт",
+    # Комунальні
+    4811: "Комунальні", 4812: "Комунальні", 4813: "Комунальні",
+    4814: "Комунальні", 4899: "Комунальні", 4900: "Комунальні",
+    # Розваги та спорт
+    5941: "Розваги та спорт", 7011: "Розваги та спорт",
+    7832: "Розваги та спорт", 7922: "Розваги та спорт",
+    7941: "Розваги та спорт", 7991: "Розваги та спорт",
+    7993: "Розваги та спорт", 7996: "Розваги та спорт",
+    7997: "Розваги та спорт", 7999: "Розваги та спорт",
+    # Одяг
+    5600: "Одяг", 5611: "Одяг", 5621: "Одяг", 5631: "Одяг",
+    5641: "Одяг", 5651: "Одяг", 5661: "Одяг", 5691: "Одяг", 5699: "Одяг",
+    # Підписки / digital
+    4816: "Підписки", 5045: "Підписки", 5734: "Підписки",
+    7372: "Підписки", 7379: "Підписки",
+}
 
 # Ключові слова для визначення категорії витрати
 EXPENSE_CAT_KEYWORDS: list[tuple[str, list[str]]] = [
@@ -1209,6 +1245,107 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.edit_message_text("💡 Напиши свою ідею:")
 
 
+# ─── Monobank integration ─────────────────────────────────────────────────────
+def _register_mono_webhook() -> None:
+    if not MONO_TOKEN or not RENDER_URL:
+        logger.warning("Monobank webhook: MONO_TOKEN або RENDER_URL не задано")
+        return
+    url = f"{RENDER_URL}/mono"
+    resp = requests.post(
+        "https://api.monobank.ua/personal/webhook",
+        headers={"X-Token": MONO_TOKEN},
+        json={"webHookUrl": url},
+        timeout=10,
+    )
+    if resp.status_code == 200:
+        logger.info(f"✅ Monobank webhook → {url}")
+    else:
+        logger.error(f"❌ Monobank webhook error {resp.status_code}: {resp.text[:200]}")
+
+
+async def handle_mono_transaction(bot, data: dict) -> None:
+    item = (data.get("data") or {}).get("statementItem") or {}
+    if not item:
+        return
+    if item.get("hold"):
+        return                              # холд — чекаємо фінальну транзакцію
+    if item.get("currencyCode", 980) != 980:
+        return                              # тільки гривня
+
+    amount_kopecks = item.get("amount", 0)
+    if amount_kopecks == 0:
+        return
+
+    description = (item.get("description") or "").strip() or "Monobank"
+    mcc         = item.get("mcc", 0)
+    time_unix   = item.get("time", 0)
+    amount_uah  = abs(amount_kopecks) / 100
+    tx_date     = date.fromtimestamp(time_unix).isoformat()
+    is_expense  = amount_kopecks < 0
+
+    if is_expense:
+        cat     = MCC_TO_CATEGORY.get(mcc, "Інше")
+        warning = _budget_status(cat, amount_uah)
+        props   = {
+            "Деталі":   title_prop(description),
+            "Дата":     date_prop(tx_date),
+            "Сума":     number_prop(amount_uah),
+            "Примітка": {"rich_text": [{"text": {"content": f"витрата|{cat}"}}]},
+        }
+        ok   = notion_create("транзакції", props)
+        icon = EXPENSE_CAT_ICONS.get(cat, "📦")
+        msg  = (
+            f"💳 Monobank\n"
+            f"💸 {description} — {amount_uah:,.0f} грн\n"
+            f"{icon} {cat}{warning}"
+        )
+    else:
+        props = {
+            "Деталі":   title_prop(description),
+            "Дата":     date_prop(tx_date),
+            "Сума":     number_prop(amount_uah),
+            "Примітка": {"rich_text": [{"text": {"content": "дохід|"}}]},
+        }
+        ok  = notion_create("транзакції", props)
+        msg = f"💳 Monobank\n💚 {description} — {amount_uah:,.0f} грн"
+
+    prefix   = "✅" if ok else "❌ Notion: помилка запису\n"
+    full_msg = f"{prefix} {msg}" if ok else f"{prefix}{msg}"
+
+    targets = list(_chat_ids)
+    if not targets:
+        logger.warning("Mono tx received but no chat_ids — set CHAT_ID env var")
+        return
+    for chat_id in targets:
+        try:
+            await bot.send_message(chat_id=chat_id, text=full_msg)
+        except Exception as e:
+            logger.error(f"Mono notify {chat_id}: {e}")
+
+
+async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    _chat_ids.add(chat_id)
+    await update.message.reply_text(
+        f"🆔 Ваш Chat ID: {chat_id}\n\n"
+        f"Щоб бот повідомляв про Monobank-транзакції після рестарту — "
+        f"додайте в Render Environment: CHAT_ID={chat_id}"
+    )
+
+
+async def cmd_setmono(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not MONO_TOKEN:
+        await update.message.reply_text(
+            "❌ MONO_TOKEN не встановлено.\n"
+            "Додайте в Render Environment Variables:\n"
+            "MONO_TOKEN = ваш токен з додатку Monobank"
+        )
+        return
+    _register_mono_webhook()
+    url = f"{RENDER_URL}/mono"
+    await update.message.reply_text(f"✅ Monobank webhook зареєстровано:\n{url}")
+
+
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "🤖 *Notion Life OS Bot*\n\n"
@@ -1238,24 +1375,26 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/budget — ліміти по категоріях vs фактичні витрати\n"
         "/transactions — останні 10 транзакцій за місяць\n"
         "/menu — головне меню (всі функції в одному місці)\n"
+        "/id — показати ваш Chat ID (потрібен для Monobank)\n"
+        "/setmono — зареєструвати Monobank webhook\n"
         "/help — ця довідка",
         parse_mode="Markdown",
     )
 
 
 # ─── Main ──────────────────────────────────────────────────────────────────────
-def main() -> None:
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-
-    app.add_handler(CommandHandler("start",   cmd_start))
-    app.add_handler(CommandHandler("help",    cmd_help))
-    app.add_handler(CommandHandler("today",   cmd_today))
+def _setup_handlers(app: Application) -> None:
+    app.add_handler(CommandHandler("start",        cmd_start))
+    app.add_handler(CommandHandler("help",         cmd_help))
+    app.add_handler(CommandHandler("id",           cmd_id))
+    app.add_handler(CommandHandler("setmono",      cmd_setmono))
+    app.add_handler(CommandHandler("today",        cmd_today))
     app.add_handler(CommandHandler("balance",      cmd_balance))
     app.add_handler(CommandHandler("budget",       cmd_budget))
     app.add_handler(CommandHandler("transactions", cmd_transactions))
-    app.add_handler(CommandHandler("menu",   cmd_menu))
-    app.add_handler(CommandHandler("week",   cmd_week))
-    app.add_handler(CommandHandler("вчора",  cmd_yesterday))
+    app.add_handler(CommandHandler("menu",         cmd_menu))
+    app.add_handler(CommandHandler("week",         cmd_week))
+    app.add_handler(CommandHandler("вчора",        cmd_yesterday))
     app.add_handler(CallbackQueryHandler(menu_callback,  pattern=r"^menu_"))
     app.add_handler(CallbackQueryHandler(habit_callback, pattern=r"^h[w]?_\d+_.+"))
     app.add_handler(CallbackQueryHandler(week_callback,  pattern=r"^week_"))
@@ -1263,18 +1402,57 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
+
+async def _webhook_main() -> None:
+    """Production mode: aiohttp server handles both Telegram and Monobank webhooks."""
+    ptb_app = Application.builder().token(TELEGRAM_TOKEN).build()
+    _setup_handlers(ptb_app)
+
+    async def tg_handler(request: web.Request) -> web.Response:
+        try:
+            data   = await request.json()
+            update = Update.de_json(data, ptb_app.bot)
+            if update and update.effective_chat:
+                _chat_ids.add(update.effective_chat.id)
+            await ptb_app.process_update(update)
+        except Exception as e:
+            logger.error(f"TG handler error: {e}")
+        return web.Response(status=200)
+
+    async def mono_post(request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+            asyncio.create_task(handle_mono_transaction(ptb_app.bot, data))
+        except Exception as e:
+            logger.error(f"Mono handler error: {e}")
+        return web.Response(status=200)
+
+    aio = web.Application()
+    aio.router.add_post(f"/{TELEGRAM_TOKEN}", tg_handler)
+    aio.router.add_post("/mono", mono_post)
+    aio.router.add_get("/mono",  lambda _: web.Response(status=200))  # Monobank verification
+
+    async with ptb_app:
+        tg_url = f"{RENDER_URL}/{TELEGRAM_TOKEN}"
+        await ptb_app.bot.set_webhook(tg_url)
+        logger.info(f"🌐 TG webhook → {tg_url}")
+        _register_mono_webhook()
+        await ptb_app.start()
+        runner = web.AppRunner(aio)
+        await runner.setup()
+        await web.TCPSite(runner, "0.0.0.0", PORT).start()
+        logger.info(f"✅ Server on :{PORT}")
+        await asyncio.Event().wait()
+
+
+def main() -> None:
     if RENDER_URL:
-        webhook_url = f"{RENDER_URL}/{TELEGRAM_TOKEN}"
-        logger.info(f"🌐 Webhook mode → {webhook_url}")
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=TELEGRAM_TOKEN,
-            webhook_url=webhook_url,
-        )
+        asyncio.run(_webhook_main())
     else:
         logger.info("🔄 Polling mode (local)...")
-        app.run_polling(drop_pending_updates=True)
+        ptb_app = Application.builder().token(TELEGRAM_TOKEN).build()
+        _setup_handlers(ptb_app)
+        ptb_app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
