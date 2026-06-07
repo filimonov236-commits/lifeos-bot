@@ -1266,14 +1266,20 @@ def _register_mono_webhook() -> None:
 async def handle_mono_transaction(bot, data: dict) -> None:
     item = (data.get("data") or {}).get("statementItem") or {}
     if not item:
+        logger.warning("Mono webhook: порожній statementItem")
         return
-    if item.get("hold"):
-        return                              # холд — чекаємо фінальну транзакцію
+    logger.info(
+        f"Mono tx: amount={item.get('amount')} hold={item.get('hold')} "
+        f"mcc={item.get('mcc')} desc={item.get('description')!r} "
+        f"currency={item.get('currencyCode')}"
+    )
     if item.get("currencyCode", 980) != 980:
+        logger.info("Mono tx: пропущено (не гривня)")
         return                              # тільки гривня
 
     amount_kopecks = item.get("amount", 0)
     if amount_kopecks == 0:
+        logger.info("Mono tx: пропущено (сума 0)")
         return
 
     description = (item.get("description") or "").strip() or "Monobank"
