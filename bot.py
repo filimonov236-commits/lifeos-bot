@@ -76,6 +76,7 @@ EXPENSE_CATEGORIES: list[tuple[str, str]] = [
     ("Розваги та спорт", "🎭"),
     ("Одяг",             "👕"),
     ("Підписки",         "📱"),
+    ("Перекази",         "💸"),
     ("Інше",             "📦"),
 ]
 EXPENSE_CAT_ICONS = dict(EXPENSE_CATEGORIES)
@@ -107,6 +108,9 @@ MCC_TO_CATEGORY: dict[int, str] = {
     # Підписки / digital
     4816: "Підписки", 5045: "Підписки", 5734: "Підписки",
     7372: "Підписки", 7379: "Підписки",
+    # Перекази
+    4829: "Перекази", 6012: "Перекази", 6051: "Перекази",
+    6211: "Перекази", 6540: "Перекази",
 }
 
 # Ключові слова для визначення категорії витрати
@@ -1301,11 +1305,10 @@ async def handle_mono_transaction(bot, data: dict) -> None:
             }
             ok   = notion_create("транзакції", props)
             icon = EXPENSE_CAT_ICONS.get(cat, "📦")
-            msg  = (
-                f"💳 Monobank\n"
-                f"💸 {description} — {amount_uah:,.0f} грн\n"
-                f"{icon} {cat}{warning}"
-            )
+            if warning:
+                msg = f"💳 Monobank\n💸 {description} — {amount_uah:,.0f} грн{warning}"
+            else:
+                msg = f"💳 Monobank\n💸 {description} — {amount_uah:,.0f} грн\n{icon} {cat}"
         else:
             props = {
                 "Деталі":   title_prop(description),
