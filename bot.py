@@ -1464,6 +1464,11 @@ async def _webhook_main() -> None:
         try:
             data   = await request.json()
             update = Update.de_json(data, ptb_app.bot)
+            if CHAT_ID and update:
+                user = update.effective_user
+                if user is None or user.id != CHAT_ID:
+                    logger.warning(f"Відхилено запит від user_id={user.id if user else 'None'}")
+                    return web.Response(status=200)
             if update and update.effective_chat:
                 _chat_ids.add(update.effective_chat.id)
             await ptb_app.process_update(update)
